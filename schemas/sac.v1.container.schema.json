@@ -1,0 +1,88 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/KeikaJames/web4.o/schemas/sac.v1.container.schema.json",
+  "title": "SAC v1 Container (local)",
+  "description": "Full local SAC container. Contains secret material. Never transmit.",
+  "type": "object",
+  "required": ["version", "sac_id", "created_at", "root_key", "memory_root", "permissions", "derived_agents", "crypto"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "type": "string", "enum": ["1"] },
+    "sac_id": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "root_key": {
+      "type": "object",
+      "required": ["key_id", "key_bytes", "created_at", "rotated_at"],
+      "additionalProperties": false,
+      "properties": {
+        "key_id": { "type": "string" },
+        "key_bytes": { "type": "string", "description": "Encrypted root key bytes." },
+        "created_at": { "type": "string", "format": "date-time" },
+        "rotated_at": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "memory_root": {
+      "type": "object",
+      "required": ["memory_id", "reference", "created_at"],
+      "additionalProperties": false,
+      "properties": {
+        "memory_id": { "type": "string" },
+        "reference": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "required": ["allowed_operations", "financial_daily_limit", "financial_single_tx_limit", "actions_require_confirmation"],
+      "additionalProperties": false,
+      "properties": {
+        "allowed_operations": { "type": "array", "items": { "type": "string" } },
+        "financial_daily_limit": { "type": ["number", "null"] },
+        "financial_single_tx_limit": { "type": ["number", "null"] },
+        "actions_require_confirmation": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "derived_agents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["agent_id", "purpose", "created_at", "parent_sac_id", "derived_key_id", "permissions", "revoked", "revoked_at"],
+        "additionalProperties": false,
+        "properties": {
+          "agent_id": { "type": "string" },
+          "purpose": { "type": "string" },
+          "created_at": { "type": "string", "format": "date-time" },
+          "parent_sac_id": { "type": "string" },
+          "derived_key_id": { "type": "string" },
+          "permissions": {
+            "type": "object",
+            "required": ["allowed_operations", "financial_daily_limit", "financial_single_tx_limit", "actions_require_confirmation"],
+            "additionalProperties": false,
+            "properties": {
+              "allowed_operations": { "type": "array", "items": { "type": "string" } },
+              "financial_daily_limit": { "type": ["number", "null"] },
+              "financial_single_tx_limit": { "type": ["number", "null"] },
+              "actions_require_confirmation": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "revoked": { "type": "boolean" },
+          "revoked_at": { "type": ["string", "null"], "format": "date-time" }
+        }
+      }
+    },
+    "recovery_method": { "type": ["string", "null"] },
+    "recovery_params": { "type": "object" },
+    "crypto": {
+      "type": "object",
+      "required": ["kdf", "iterations", "salt", "nonce", "mac"],
+      "additionalProperties": false,
+      "properties": {
+        "kdf": { "type": "string", "enum": ["pbkdf2-hmac-sha256"] },
+        "iterations": { "type": "integer", "minimum": 1 },
+        "salt": { "type": "string" },
+        "nonce": { "type": "string" },
+        "mac": { "type": "string" }
+      }
+    }
+  }
+}
