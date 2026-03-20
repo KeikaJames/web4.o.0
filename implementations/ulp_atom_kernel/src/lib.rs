@@ -15,3 +15,4 @@ pub mod pipeline;
 pub mod shard;
 pub mod object_store;
 pub mod backend;
+pub mod sovereignty;

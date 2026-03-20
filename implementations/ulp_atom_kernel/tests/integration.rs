@@ -3207,3 +3207,288 @@ fn runner_uses_real_backend_not_mock() {
     let kind = backend_kind.unwrap();
     assert!(kind == "Vulkan" || kind == "Mock", "unexpected backend: {kind}");
 }
+
+// ===========================================================================
+// Sovereignty boundary: Home Node / Ephemeral Node
+// ===========================================================================
+
+fn make_ephemeral_candidate(node_id: &str, region: &str) -> ulp_atom_kernel::router::NodeProfile {
+    use ulp_atom_kernel::atom::{AtomKind, Region};
+    use ulp_atom_kernel::capacity::NodeCapacity;
+    ulp_atom_kernel::router::NodeProfile {
+        node_id: node_id.into(),
+        region: Region(region.into()),
+        latency_ms: 10.0,
+        hotness: 0.5,
+        supported_kinds: vec![AtomKind::Prefill, AtomKind::Decode, AtomKind::Inference],
+        sovereignty_zone: region.into(),
+        prefill_affinity: 0.8,
+        decode_affinity: 0.8,
+        capacity: NodeCapacity {
+            available_vram_gb: 16.0,
+            current_load: 0.2,
+            active_kv_chunks: 0,
+        },
+    }
+}
+
+#[test]
+fn home_node_holds_persistent_state() {
+    use ulp_atom_kernel::atom::Region;
+    use ulp_atom_kernel::kv::KVChunk;
+    use ulp_atom_kernel::sovereignty::HomeNode;
+
+    let mut home = HomeNode::new("home-1", "zone-a", Region("us-east".into()));
+    assert!(home.kv_store.is_empty());
+    assert!(home.hot_shards.is_empty());
+
+    // Home node accumulates KV state
+    home.kv_store.push(KVChunk {
+        chunk_id: "kv-1".into(),
+        source_region: Region("us-east".into()),
+        seq_start: 0,
+        seq_end: 128,
+        byte_size: 256,
+        payload: vec![0xAA; 256],
+    });
+    assert_eq!(home.kv_store.len(), 1);
+    assert_eq!(home.sovereignty_zone, "zone-a");
+}
+
+#[test]
+fn ephemeral_node_is_stateless() {
+    use ulp_atom_kernel::atom::{AtomKind, Region};
+    use ulp_atom_kernel::sovereignty::EphemeralNode;
+
+    let eph = EphemeralNode::new(
+        "eph-1",
+        Region("eu-west".into()),
+        vec![AtomKind::Prefill, AtomKind::Decode],
+    );
+    // Ephemeral node has no KV store, no shards, no sovereignty zone
+    assert_eq!(eph.node_id, "eph-1");
+    assert_eq!(eph.supported_kinds.len(), 2);
+}
+
+#[test]
+fn home_node_generates_outsource_request() {
+    use ulp_atom_kernel::atom::{AtomKind, ComputeAtom, Region};
+    use ulp_atom_kernel::sovereignty::HomeNode;
+
+    let home = HomeNode::new("home-1", "zone-a", Region("us-east".into()));
+    let atom = ComputeAtom {
+        id: "atom-1".into(),
+        kind: AtomKind::Inference,
+        region: Region("us-east".into()),
+        model_id: "model-x".into(),
+        shard_count: 0,
+    };
+    let candidates = vec![make_ephemeral_candidate("eph-1", "us-east")];
+
+    let (request, blinded) = home.prepare_outsource(&atom, vec![0x01, 0x02], &candidates).unwrap();
+
+    // HomeExecutionRequest stays on home side
+    assert_eq!(request.home_node_id, "home-1");
+    assert_eq!(request.target_node_id, "eph-1");
+
+    // BlindedAtom has no sovereignty zone, no home node identity
+    assert_eq!(blinded.atom_id, "atom-1");
+    assert_eq!(blinded.model_id, "model-x");
+    assert_eq!(blinded.input, vec![0x01, 0x02]);
+}
+
+#[test]
+fn blinded_atom_strips_sovereignty_metadata() {
+    use ulp_atom_kernel::atom::{AtomKind, ComputeAtom, Region};
+    use ulp_atom_kernel::sovereignty::HomeNode;
+
+    let home = HomeNode::new("home-1", "secret-zone", Region("us-east".into()));
+    let atom = ComputeAtom {
+        id: "atom-2".into(),
+        kind: AtomKind::Prefill,
+        region: Region("us-east".into()),
+        model_id: "model-y".into(),
+        shard_count: 0,
+    };
+    let candidates = vec![make_ephemeral_candidate("eph-2", "us-east")];
+
+    let (_request, blinded) = home.prepare_outsource(&atom, vec![0xFF], &candidates).unwrap();
+
+    // Serialize blinded atom and verify no sovereignty info leaks
+    let json = serde_json::to_string(&blinded).unwrap();
+    assert!(!json.contains("secret-zone"), "sovereignty zone must not appear in blinded atom");
+    assert!(!json.contains("home-1"), "home node id must not appear in blinded atom");
+}
+
+#[test]
+fn ephemeral_executes_blinded_atom_and_returns_result() {
+    use ulp_atom_kernel::atom::{AtomKind, Region};
+    use ulp_atom_kernel::backend::MockBackend;
+    use ulp_atom_kernel::sovereignty::{BlindedAtom, EphemeralNode};
+
+    let eph = EphemeralNode::new(
+        "eph-1",
+        Region("us-east".into()),
+        vec![AtomKind::Inference],
+    );
+    let blinded = BlindedAtom {
+        atom_id: "atom-1".into(),
+        kind: AtomKind::Inference,
+        model_id: "model-x".into(),
+        input: vec![0x61, 0x62, 0x63], // "abc"
+        kv_chunks: Vec::new(),
+    };
+
+    let result = eph.execute(&MockBackend, &blinded).unwrap();
+
+    assert_eq!(result.ephemeral_node_id, "eph-1");
+    assert_eq!(result.atom_id, "atom-1");
+    // MockBackend uppercases: 0x61->0x41, 0x62->0x42, 0x63->0x43
+    assert_eq!(result.output, vec![0x41, 0x42, 0x43]);
+    assert!(result.tokens_produced > 0);
+}
+
+#[test]
+fn home_receives_result_and_absorbs_kv() {
+    use ulp_atom_kernel::atom::Region;
+    use ulp_atom_kernel::kv::KVChunk;
+    use ulp_atom_kernel::router::PlacementDecision;
+    use ulp_atom_kernel::sovereignty::{EphemeralExecutionResult, HomeExecutionRequest, HomeNode};
+
+    let mut home = HomeNode::new("home-1", "zone-a", Region("us-east".into()));
+    assert!(home.kv_store.is_empty());
+
+    let request = HomeExecutionRequest {
+        home_node_id: "home-1".into(),
+        target_node_id: "eph-1".into(),
+        placement: PlacementDecision {
+            breakdown: ulp_atom_kernel::router::PlacementBreakdown {
+                node_id: "eph-1".into(),
+                final_score: 0.9,
+                latency_score: 0.9,
+                hotness_score: 0.5,
+                engine_score: 1.0,
+                specialization_score: 0.8,
+                kv_locality_score: 0.0,
+                sovereignty_score: 1.0,
+                migration_cost: 0.0,
+                capacity_score: 0.8,
+            },
+            requires_kv_migration: false,
+            estimated_migration_cost: 0.0,
+        },
+        atom_region: Region("us-east".into()),
+    };
+
+    let eph_result = EphemeralExecutionResult {
+        ephemeral_node_id: "eph-1".into(),
+        atom_id: "atom-1".into(),
+        output: vec![0x41, 0x42],
+        tokens_produced: 2,
+        kv_produced: vec![KVChunk {
+            chunk_id: "kv-new".into(),
+            source_region: Region("us-east".into()),
+            seq_start: 0,
+            seq_end: 64,
+            byte_size: 128,
+            payload: vec![0xBB; 128],
+        }],
+    };
+
+    let response = home.receive_result(&request, eph_result);
+
+    assert_eq!(response.home_node_id, "home-1");
+    assert_eq!(response.output, vec![0x41, 0x42]);
+    assert_eq!(response.kv_absorbed, 1);
+    assert_eq!(response.ephemeral_node_id, "eph-1");
+    // KV was absorbed into home node's store
+    assert_eq!(home.kv_store.len(), 1);
+    assert_eq!(home.kv_store[0].chunk_id, "kv-new");
+}
+
+#[test]
+fn full_home_ephemeral_roundtrip() {
+    use ulp_atom_kernel::atom::{AtomKind, ComputeAtom, Region};
+    use ulp_atom_kernel::backend::MockBackend;
+    use ulp_atom_kernel::sovereignty::{EphemeralNode, HomeNode};
+
+    // 1. Home node prepares outsource
+    let mut home = HomeNode::new("home-1", "zone-a", Region("us-east".into()));
+    let atom = ComputeAtom {
+        id: "atom-round".into(),
+        kind: AtomKind::Inference,
+        region: Region("us-east".into()),
+        model_id: "model-z".into(),
+        shard_count: 0,
+    };
+    let candidates = vec![make_ephemeral_candidate("eph-1", "us-east")];
+
+    let (request, blinded) = home.prepare_outsource(&atom, vec![0x68, 0x69], &candidates).unwrap();
+
+    // 2. Ephemeral node executes
+    let eph = EphemeralNode::new(
+        "eph-1",
+        Region("us-east".into()),
+        vec![AtomKind::Inference],
+    );
+    let eph_result = eph.execute(&MockBackend, &blinded).unwrap();
+
+    // 3. Home node receives result
+    let response = home.receive_result(&request, eph_result);
+
+    // MockBackend uppercases: 0x68('h')->0x48('H'), 0x69('i')->0x49('I')
+    assert_eq!(response.output, vec![0x48, 0x49]);
+    assert_eq!(response.home_node_id, "home-1");
+    assert_eq!(response.ephemeral_node_id, "eph-1");
+    // Home node absorbed KV from execution (empty in this case since no
+    // KV was provided — KV absorption is tested in home_receives_result_and_absorbs_kv)
+    assert_eq!(response.tokens_produced, 1);
+}
+
+#[test]
+fn ephemeral_rejects_unsupported_kind() {
+    use ulp_atom_kernel::atom::{AtomKind, Region};
+    use ulp_atom_kernel::backend::MockBackend;
+    use ulp_atom_kernel::sovereignty::{BlindedAtom, EphemeralNode};
+
+    // Ephemeral only supports Embedding
+    let eph = EphemeralNode::new(
+        "eph-limited",
+        Region("us-east".into()),
+        vec![AtomKind::Embedding],
+    );
+    let blinded = BlindedAtom {
+        atom_id: "atom-x".into(),
+        kind: AtomKind::Inference, // not supported
+        model_id: "model-x".into(),
+        input: vec![0x01],
+        kv_chunks: Vec::new(),
+    };
+
+    let err = eph.execute(&MockBackend, &blinded).unwrap_err();
+    assert!(err.contains("does not support"), "error: {err}");
+}
+
+#[test]
+fn home_local_execution_absorbs_kv() {
+    use ulp_atom_kernel::atom::{AtomKind, ComputeAtom, Region};
+    use ulp_atom_kernel::backend::MockBackend;
+    use ulp_atom_kernel::sovereignty::HomeNode;
+
+    let mut home = HomeNode::new("home-1", "zone-a", Region("us-east".into()));
+    let atom = ComputeAtom {
+        id: "local-atom".into(),
+        kind: AtomKind::Inference,
+        region: Region("us-east".into()),
+        model_id: "model-local".into(),
+        shard_count: 0,
+    };
+    let candidates = vec![make_ephemeral_candidate("home-1", "us-east")];
+
+    let response = home.execute_local(&MockBackend, &atom, vec![0x61], &candidates).unwrap();
+
+    // Local execution works through existing kernel::dispatch
+    assert!(!response.exec_response.output.is_empty());
+    // KV state absorbed
+    assert_eq!(home.kv_store.len(), response.exec_response.kv_state.len());
+}
