@@ -1,0 +1,32 @@
+[
+  {
+    "node_id": "us-west-gpu-0",
+    "region": "us-west",
+    "latency_ms": 5.0,
+    "hotness": 0.8,
+    "supported_kinds": ["Inference", "Prefill", "Decode", "Embedding"],
+    "sovereignty_zone": "us-west",
+    "prefill_affinity": 0.9,
+    "decode_affinity": 0.4
+  },
+  {
+    "node_id": "eu-central-gpu-0",
+    "region": "eu-central",
+    "latency_ms": 45.0,
+    "hotness": 0.95,
+    "supported_kinds": ["Inference", "Prefill", "Decode"],
+    "sovereignty_zone": "eu-central",
+    "prefill_affinity": 0.3,
+    "decode_affinity": 0.95
+  },
+  {
+    "node_id": "ap-east-gpu-0",
+    "region": "ap-east",
+    "latency_ms": 70.0,
+    "hotness": 0.3,
+    "supported_kinds": ["Inference", "Prefill", "FineTune"],
+    "sovereignty_zone": "ap-east",
+    "prefill_affinity": 0.5,
+    "decode_affinity": 0.2
+  }
+]

@@ -1,0 +1,50 @@
+[
+  {
+    "node_id": "remote-prefill-optimized",
+    "region": "us-west",
+    "latency_ms": 15.0,
+    "hotness": 0.8,
+    "supported_kinds": ["Prefill", "Decode", "Inference"],
+    "sovereignty_zone": "us-west",
+    "prefill_affinity": 0.95,
+    "decode_affinity": 0.4,
+    "capacity": {
+      "available_vram_gb": 80.0,
+      "current_load": 0.2,
+      "active_kv_chunks": 10
+    },
+    "endpoint": "http://127.0.0.1:3001/dispatch"
+  },
+  {
+    "node_id": "remote-decode-optimized",
+    "region": "us-west",
+    "latency_ms": 5.0,
+    "hotness": 0.9,
+    "supported_kinds": ["Prefill", "Decode", "Inference"],
+    "sovereignty_zone": "us-west",
+    "prefill_affinity": 0.3,
+    "decode_affinity": 0.95,
+    "capacity": {
+      "available_vram_gb": 24.0,
+      "current_load": 0.1,
+      "active_kv_chunks": 5
+    },
+    "endpoint": "http://127.0.0.1:3002/dispatch"
+  },
+  {
+    "node_id": "remote-overloaded",
+    "region": "eu-central",
+    "latency_ms": 50.0,
+    "hotness": 0.5,
+    "supported_kinds": ["Inference", "Embedding"],
+    "sovereignty_zone": "eu-central",
+    "prefill_affinity": 0.5,
+    "decode_affinity": 0.5,
+    "capacity": {
+      "available_vram_gb": 8.0,
+      "current_load": 0.85,
+      "active_kv_chunks": 80
+    },
+    "endpoint": "http://127.0.0.1:3003/dispatch"
+  }
+]

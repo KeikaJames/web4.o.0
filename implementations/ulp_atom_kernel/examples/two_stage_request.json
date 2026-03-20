@@ -1,0 +1,8 @@
+{
+  "agent_id": "agent-two-stage",
+  "sovereignty_zone": "us-west",
+  "model_id": "llama-7b",
+  "atom_kind": "Inference",
+  "input": [72, 101, 108, 108, 111],
+  "two_stage": true
+}

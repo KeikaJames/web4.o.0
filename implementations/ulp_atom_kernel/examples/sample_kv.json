@@ -1,0 +1,18 @@
+[
+  {
+    "chunk_id": "kv-session-0",
+    "source_region": "eu-central",
+    "seq_start": 0,
+    "seq_end": 255,
+    "byte_size": 16384,
+    "payload": []
+  },
+  {
+    "chunk_id": "kv-session-1",
+    "source_region": "eu-central",
+    "seq_start": 256,
+    "seq_end": 511,
+    "byte_size": 16384,
+    "payload": []
+  }
+]

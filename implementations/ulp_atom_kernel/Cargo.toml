@@ -1,0 +1,22 @@
+[package]
+name = "ulp_atom_kernel"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "ulp_atom_kernel_runner"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ciborium = "0.2"
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
+ash = { version = "0.38", default-features = false, features = ["loaded"] }
+libloading = "0.8"
+native-tls = "0.2"
+
+[dev-dependencies]
+tempfile = "3.10"

@@ -1,0 +1,7 @@
+{
+  "agent_id": "agent-demo",
+  "sovereignty_zone": "us-west",
+  "model_id": "llama-7b",
+  "atom_kind": "Prefill",
+  "input": [72, 101, 108, 108, 111, 32, 85, 76, 80]
+}
