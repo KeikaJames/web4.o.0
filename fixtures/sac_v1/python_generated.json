@@ -1,0 +1,54 @@
+{
+  "version": "1",
+  "sac_id": "5ab1180e-9a88-4d44-97eb-73055aa77fcf",
+  "created_at": "2026-03-18T18:37:16.694019Z",
+  "root_key": {
+    "key_id": "ba241a38-ee1c-48a5-9fa5-64b88feb6612",
+    "key_bytes": "P8vfaBX5SJZZDPSRwEBqbOK0byqUErpoKkDMljRc4Y0=",
+    "created_at": "2026-03-18T18:37:16.694091Z",
+    "rotated_at": null
+  },
+  "memory_root": {
+    "memory_id": "b56c9086-d4cd-44bf-b806-e6fbdf1486b2",
+    "reference": "HoNNgGn1TZo=",
+    "created_at": "2026-03-18T18:37:16.694098Z"
+  },
+  "permissions": {
+    "allowed_operations": [
+      "file.write",
+      "financial.transaction"
+    ],
+    "financial_daily_limit": null,
+    "financial_single_tx_limit": 500.0,
+    "actions_require_confirmation": []
+  },
+  "derived_agents": [
+    {
+      "agent_id": "eb4dfadc-5662-4a72-9590-f64471d35a47",
+      "purpose": "fixture-agent",
+      "created_at": "2026-03-18T18:37:16.694121Z",
+      "parent_sac_id": "5ab1180e-9a88-4d44-97eb-73055aa77fcf",
+      "derived_key_id": "cfe7c3e3efc3b6c5",
+      "permissions": {
+        "allowed_operations": [
+          "file.write",
+          "financial.transaction"
+        ],
+        "financial_daily_limit": null,
+        "financial_single_tx_limit": 500.0,
+        "actions_require_confirmation": []
+      },
+      "revoked": false,
+      "revoked_at": null
+    }
+  ],
+  "recovery_method": null,
+  "recovery_params": {},
+  "crypto": {
+    "kdf": "pbkdf2-hmac-sha256",
+    "iterations": 100000,
+    "salt": "022VdmDe8jN7VjoZKHh3Ow==",
+    "nonce": "TgK+n2ia6LfoHFNz5oa3eQ==",
+    "mac": "a71293bdfcdd3a15d37ef12f1d6f1d75c46361f34019dbf74f3cb951188df0b6"
+  }
+}
