@@ -80,6 +80,7 @@ impl HomeNode {
             target_node_id,
             placement: decision,
             atom_region: atom.region.clone(),
+            prib_mask: vec![],
         };
 
         Ok((request, blinded))
@@ -106,6 +107,81 @@ impl HomeNode {
         HomeExecutionResponse {
             home_node_id: request.home_node_id.clone(),
             output: result.output,
+            tokens_produced: result.tokens_produced,
+            kv_absorbed: result.kv_produced.len(),
+            ephemeral_node_id: result.ephemeral_node_id,
+        }
+    }
+
+    /// PRIB path: blind the input, prepare outsource request with mask.
+    /// The mask is stored in HomeExecutionRequest and never sent to the
+    /// Ephemeral Node. BlindedAtom only contains the blinded payload.
+    pub fn prepare_outsource_blinded(
+        &self,
+        atom: &ComputeAtom,
+        input: Vec<u8>,
+        candidates: &[NodeProfile],
+    ) -> Result<(HomeExecutionRequest, BlindedAtom), String> {
+        let kv_ctx = crate::router::KVContext {
+            active_chunks: &self.kv_store,
+        };
+        let decision = crate::router::route_with_kv(atom, candidates, Some(&kv_ctx))
+            .ok_or_else(|| "no suitable ephemeral node found".to_string())?;
+
+        let target_node_id = decision.breakdown.node_id.clone();
+
+        // Derive mask from atom_id + home_node_id — stays on home side only
+        let mask_seed = format!("{}:{}", atom.id, self.node_id);
+        let mask = crate::prib::derive_mask(&mask_seed, input.len());
+
+        // Blind the input before it leaves the home node
+        let blinded_input = crate::prib::blind(&input, &mask);
+
+        let blinded = BlindedAtom {
+            atom_id: atom.id.clone(),
+            kind: atom.kind.clone(),
+            model_id: atom.model_id.clone(),
+            input: blinded_input, // ephemeral node only sees this
+            kv_chunks: if decision.requires_kv_migration {
+                self.kv_store.clone()
+            } else {
+                Vec::new()
+            },
+        };
+
+        let request = HomeExecutionRequest {
+            home_node_id: self.node_id.clone(),
+            target_node_id,
+            placement: decision,
+            atom_region: atom.region.clone(),
+            prib_mask: mask, // never leaves home node
+        };
+
+        Ok((request, blinded))
+    }
+
+    /// PRIB path: receive blinded result and unblind using the stored mask.
+    /// Absorbs KV state as usual.
+    pub fn receive_result_blinded(
+        &mut self,
+        request: &HomeExecutionRequest,
+        result: EphemeralExecutionResult,
+    ) -> HomeExecutionResponse {
+        // Unblind the output using the mask from the original request
+        let real_output = crate::prib::unblind(&result.output, &request.prib_mask);
+
+        // Absorb KV chunks
+        for chunk in &result.kv_produced {
+            if let Some(pos) = self.kv_store.iter().position(|c| c.chunk_id == chunk.chunk_id) {
+                self.kv_store[pos] = chunk.clone();
+            } else {
+                self.kv_store.push(chunk.clone());
+            }
+        }
+
+        HomeExecutionResponse {
+            home_node_id: request.home_node_id.clone(),
+            output: real_output,
             tokens_produced: result.tokens_produced,
             kv_absorbed: result.kv_produced.len(),
             ephemeral_node_id: result.ephemeral_node_id,
@@ -211,12 +287,16 @@ pub struct BlindedAtom {
 }
 
 /// Home node's record of an outsourced execution. Stays on the home side.
+/// The `prib_mask` is the blind material — never sent to the Ephemeral Node.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HomeExecutionRequest {
     pub home_node_id: String,
     pub target_node_id: String,
     pub placement: PlacementDecision,
     pub atom_region: Region,
+    /// PRIB mask held exclusively by the Home Node. Not included in BlindedAtom.
+    #[serde(default)]
+    pub prib_mask: Vec<u8>,
 }
 
 /// What the ephemeral node returns after execution.
