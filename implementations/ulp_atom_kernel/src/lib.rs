@@ -16,4 +16,5 @@ pub mod shard;
 pub mod object_store;
 pub mod backend;
 pub mod prib;
+pub mod runtime;
 pub mod sovereignty;

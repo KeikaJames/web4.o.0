@@ -3825,3 +3825,309 @@ fn two_stage_outsourced_same_node_no_migration() {
     // Same node → no migration
     assert!(!response.kv_migrated);
 }
+
+// ===========================================================================
+// Minimum node runtime: SlotOffer / SlotClaim / Nonce / DiscoveryPool / retry
+// ===========================================================================
+
+#[test]
+fn discovery_pool_register_and_query() {
+    use ulp_atom_kernel::atom::{AtomKind, Region};
+    use ulp_atom_kernel::runtime::{DiscoveryPool, SlotOffer};
+
+    let mut pool = DiscoveryPool::new();
+    assert!(pool.is_empty());
+
+    pool.register(SlotOffer {
+        node_id: "eph-1".into(),
+        region: Region("us-east".into()),
+        supported_kinds: vec![AtomKind::Prefill, AtomKind::Inference],
+        capacity_hint: 4,
+        expires_in_ms: 5000,
+    });
+    pool.register(SlotOffer {
+        node_id: "eph-2".into(),
+        region: Region("eu-west".into()),
+        supported_kinds: vec![AtomKind::Decode],
+        capacity_hint: 2,
+        expires_in_ms: 5000,
+    });
+
+    assert_eq!(pool.len(), 2);
+
+    let prefill_cands = pool.candidates_for(&AtomKind::Prefill, None);
+    assert_eq!(prefill_cands.len(), 1);
+    assert_eq!(prefill_cands[0].node_id, "eph-1");
+
+    let decode_cands = pool.candidates_for(&AtomKind::Decode, None);
+    assert_eq!(decode_cands.len(), 1);
+    assert_eq!(decode_cands[0].node_id, "eph-2");
+
+    // Region filter
+    let us_inference = pool.candidates_for(&AtomKind::Inference, Some(&Region("us-east".into())));
+    assert_eq!(us_inference.len(), 1);
+
+    let eu_inference = pool.candidates_for(&AtomKind::Inference, Some(&Region("eu-west".into())));
+    assert!(eu_inference.is_empty());
+}
+
+#[test]
+fn discovery_pool_deregister() {
+    use ulp_atom_kernel::atom::{AtomKind, Region};
+    use ulp_atom_kernel::runtime::{DiscoveryPool, SlotOffer};
+
+    let mut pool = DiscoveryPool::new();
+    pool.register(SlotOffer {
+        node_id: "eph-x".into(),
+        region: Region("us-east".into()),
+        supported_kinds: vec![AtomKind::Inference],
+        capacity_hint: 1,
+        expires_in_ms: 1000,
+    });
+    assert_eq!(pool.len(), 1);
+    pool.deregister("eph-x");
+    assert!(pool.is_empty());
+}
+
+#[test]
+fn slot_claim_nonce_matches() {
+    use ulp_atom_kernel::atom::AtomKind;
+    use ulp_atom_kernel::runtime::{Nonce, SlotClaim, SlotClaimResponse};
+
+    let nonce = Nonce::new(42);
+    let claim = SlotClaim {
+        home_node_id: "home-1".into(),
+        target_node_id: "eph-1".into(),
+        nonce: nonce.clone(),
+        requested_kind: AtomKind::Inference,
+        timeout_ms: 1000,
+    };
+
+    // Correct nonce echoed back
+    let ok_response = SlotClaimResponse::Accepted {
+        node_id: "eph-1".into(),
+        nonce: Nonce::new(42),
+    };
+    assert!(ok_response.verify_nonce(&claim).is_ok());
+
+    // Wrong nonce
+    let bad_response = SlotClaimResponse::Accepted {
+        node_id: "eph-1".into(),
+        nonce: Nonce::new(99),
+    };
+    let err = bad_response.verify_nonce(&claim).unwrap_err();
+    assert!(err.contains("nonce mismatch"), "error: {err}");
+}
+
+#[test]
+fn slot_claim_rejected_response_fails_verify() {
+    use ulp_atom_kernel::atom::AtomKind;
+    use ulp_atom_kernel::runtime::{Nonce, SlotClaim, SlotClaimResponse};
+
+    let claim = SlotClaim {
+        home_node_id: "home-1".into(),
+        target_node_id: "eph-busy".into(),
+        nonce: Nonce::new(7),
+        requested_kind: AtomKind::Decode,
+        timeout_ms: 500,
+    };
+    let rejected = SlotClaimResponse::Rejected {
+        node_id: "eph-busy".into(),
+        reason: "at capacity".into(),
+    };
+    let err = rejected.verify_nonce(&claim).unwrap_err();
+    assert!(err.contains("slot rejected"), "error: {err}");
+}
+
+#[test]
+fn claim_slot_succeeds_on_first_candidate() {
+    use ulp_atom_kernel::atom::{AtomKind, Region};
+    use ulp_atom_kernel::runtime::{claim_slot, DiscoveryPool, SlotClaimResponse, SlotOffer};
+
+    let mut pool = DiscoveryPool::new();
+    pool.register(SlotOffer {
+        node_id: "eph-1".into(),
+        region: Region("us-east".into()),
+        supported_kinds: vec![AtomKind::Inference],
+        capacity_hint: 4,
+        expires_in_ms: 5000,
+    });
+
+    // Simulate: always echo the nonce back correctly
+    let result = claim_slot(
+        &pool,
+        "home-1",
+        &AtomKind::Inference,
+        None,
+        1000,
+        500,
+        |claim| SlotClaimResponse::Accepted {
+            node_id: claim.target_node_id.clone(),
+            nonce: claim.nonce.clone(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(result.node_id, "eph-1");
+    assert_eq!(result.attempts, 1);
+}
+
+#[test]
+fn claim_slot_retries_on_nonce_mismatch() {
+    use ulp_atom_kernel::atom::{AtomKind, Region};
+    use ulp_atom_kernel::runtime::{claim_slot, DiscoveryPool, Nonce, SlotClaimResponse, SlotOffer};
+
+    let mut pool = DiscoveryPool::new();
+    pool.register(SlotOffer {
+        node_id: "eph-bad".into(),
+        region: Region("us-east".into()),
+        supported_kinds: vec![AtomKind::Inference],
+        capacity_hint: 1,
+        expires_in_ms: 5000,
+    });
+    pool.register(SlotOffer {
+        node_id: "eph-good".into(),
+        region: Region("us-east".into()),
+        supported_kinds: vec![AtomKind::Inference],
+        capacity_hint: 2,
+        expires_in_ms: 5000,
+    });
+
+    // First candidate returns wrong nonce, second echoes correctly
+    let result = claim_slot(
+        &pool,
+        "home-1",
+        &AtomKind::Inference,
+        None,
+        1000,
+        500,
+        |claim| {
+            if claim.target_node_id == "eph-bad" {
+                // Return wrong nonce → triggers retry
+                SlotClaimResponse::Accepted {
+                    node_id: claim.target_node_id.clone(),
+                    nonce: Nonce::new(0xDEAD),
+                }
+            } else {
+                // Second candidate echoes correctly
+                SlotClaimResponse::Accepted {
+                    node_id: claim.target_node_id.clone(),
+                    nonce: claim.nonce.clone(),
+                }
+            }
+        },
+    )
+    .unwrap();
+
+    assert_eq!(result.node_id, "eph-good");
+    assert_eq!(result.attempts, 2, "should have tried 2 candidates");
+}
+
+#[test]
+fn claim_slot_fails_when_all_candidates_reject() {
+    use ulp_atom_kernel::atom::{AtomKind, Region};
+    use ulp_atom_kernel::runtime::{claim_slot, DiscoveryPool, SlotClaimResponse, SlotOffer};
+
+    let mut pool = DiscoveryPool::new();
+    pool.register(SlotOffer {
+        node_id: "eph-1".into(),
+        region: Region("us-east".into()),
+        supported_kinds: vec![AtomKind::Decode],
+        capacity_hint: 0,
+        expires_in_ms: 1000,
+    });
+
+    let err = claim_slot(
+        &pool,
+        "home-1",
+        &AtomKind::Decode,
+        None,
+        1000,
+        100,
+        |claim| SlotClaimResponse::Rejected {
+            node_id: claim.target_node_id.clone(),
+            reason: "busy".into(),
+        },
+    )
+    .unwrap_err();
+
+    assert!(err.contains("all candidates failed"), "error: {err}");
+}
+
+#[test]
+fn claim_slot_no_candidates_error() {
+    use ulp_atom_kernel::atom::{AtomKind, Region};
+    use ulp_atom_kernel::runtime::{claim_slot, DiscoveryPool};
+
+    let pool = DiscoveryPool::new(); // empty
+
+    let err = claim_slot(
+        &pool,
+        "home-1",
+        &AtomKind::Embedding,
+        Some(&Region("us-east".into())),
+        42,
+        200,
+        |_| unreachable!("should not be called"),
+    )
+    .unwrap_err();
+
+    assert!(err.contains("no candidates"), "error: {err}");
+}
+
+#[test]
+fn nonce_matches_only_equal_value() {
+    use ulp_atom_kernel::runtime::Nonce;
+
+    let n1 = Nonce::new(123);
+    let n2 = Nonce::new(123);
+    let n3 = Nonce::new(456);
+
+    assert!(n1.matches(&n2));
+    assert!(!n1.matches(&n3));
+}
+
+#[test]
+fn relative_timeout_not_expired_immediately() {
+    use ulp_atom_kernel::runtime::RelativeTimeout;
+
+    let t = RelativeTimeout::from_millis(60_000); // 1 min
+    assert!(!t.is_expired());
+    assert!(t.remaining_ms() > 0);
+}
+
+#[test]
+fn relative_timeout_expired_at_zero() {
+    use ulp_atom_kernel::runtime::RelativeTimeout;
+
+    let t = RelativeTimeout::from_millis(0);
+    // May or may not be expired instantly depending on scheduler,
+    // but remaining should be 0
+    assert_eq!(t.remaining_ms(), 0);
+}
+
+#[test]
+fn discovery_pool_replaces_existing_offer() {
+    use ulp_atom_kernel::atom::{AtomKind, Region};
+    use ulp_atom_kernel::runtime::{DiscoveryPool, SlotOffer};
+
+    let mut pool = DiscoveryPool::new();
+    pool.register(SlotOffer {
+        node_id: "eph-1".into(),
+        region: Region("us-east".into()),
+        supported_kinds: vec![AtomKind::Prefill],
+        capacity_hint: 1,
+        expires_in_ms: 1000,
+    });
+    // Re-register same node with updated capacity
+    pool.register(SlotOffer {
+        node_id: "eph-1".into(),
+        region: Region("us-east".into()),
+        supported_kinds: vec![AtomKind::Prefill],
+        capacity_hint: 8,
+        expires_in_ms: 5000,
+    });
+    assert_eq!(pool.len(), 1, "should not duplicate same node_id");
+    let cands = pool.candidates_for(&AtomKind::Prefill, None);
+    assert_eq!(cands[0].capacity_hint, 8);
+}
