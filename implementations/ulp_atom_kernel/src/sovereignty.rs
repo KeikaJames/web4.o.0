@@ -188,6 +188,102 @@ impl HomeNode {
         }
     }
 
+    /// Two-stage outsourced execution: Prefill → Decode through the sovereignty
+    /// boundary. HomeNode orchestrates both stages. EphemeralNode is stateless.
+    ///
+    /// Flow:
+    ///   1. Blind prefill input → BlindedAtom
+    ///   2. Ephemeral executes Prefill → EphemeralExecutionResult
+    ///   3. Home receives prefill result, builds PrefillReceipt
+    ///   4. Blind decode input (prefill output) → BlindedAtom
+    ///   5. Ephemeral executes Decode (with prefill KV) → EphemeralExecutionResult
+    ///   6. Home unblind decode result → TwoStageOutsourcedResponse
+    pub fn execute_two_stage_outsourced(
+        &mut self,
+        backend: &dyn Backend,
+        prefill_atom: &ComputeAtom,
+        decode_atom: &ComputeAtom,
+        input: Vec<u8>,
+        prefill_candidates: &[NodeProfile],
+        decode_candidates: &[NodeProfile],
+    ) -> Result<TwoStageOutsourcedResponse, String> {
+        // --- Stage 1: Prefill ---
+
+        // Route and blind the prefill input
+        let (prefill_request, prefill_blinded) =
+            self.prepare_outsource_blinded(prefill_atom, input, prefill_candidates)?;
+
+        // Build the ephemeral node for prefill (stateless, no home state)
+        let prefill_eph = EphemeralNode {
+            node_id: prefill_request.target_node_id.clone(),
+            region: prefill_atom.region.clone(),
+            supported_kinds: vec![prefill_atom.kind.clone()],
+        };
+        let prefill_eph_result = prefill_eph.execute(backend, &prefill_blinded)?;
+
+        // Home receives prefill, unblind output, build receipt
+        let prefill_real_output =
+            crate::prib::unblind(&prefill_eph_result.output, &prefill_request.prib_mask);
+
+        // Absorb prefill KV into home store
+        for chunk in &prefill_eph_result.kv_produced {
+            if let Some(pos) = self.kv_store.iter().position(|c| c.chunk_id == chunk.chunk_id) {
+                self.kv_store[pos] = chunk.clone();
+            } else {
+                self.kv_store.push(chunk.clone());
+            }
+        }
+
+        let prefill_receipt = PrefillReceipt {
+            atom_id: prefill_atom.id.clone(),
+            prefill_node_id: prefill_request.target_node_id.clone(),
+            tokens_produced: prefill_eph_result.tokens_produced,
+            kv_produced: prefill_eph_result.kv_produced.clone(),
+            prefill_output: prefill_real_output.clone(),
+        };
+
+        // --- Stage 2: Decode ---
+
+        // Decode input is the real prefill output
+        let (decode_request, mut decode_blinded) =
+            self.prepare_outsource_blinded(decode_atom, prefill_real_output, decode_candidates)?;
+
+        // Carry prefill KV into decode blinded atom
+        decode_blinded.kv_chunks = prefill_receipt.kv_produced.clone();
+
+        let kv_migrated = prefill_request.target_node_id != decode_request.target_node_id;
+
+        let decode_eph = EphemeralNode {
+            node_id: decode_request.target_node_id.clone(),
+            region: decode_atom.region.clone(),
+            supported_kinds: vec![decode_atom.kind.clone()],
+        };
+        let decode_eph_result = decode_eph.execute(backend, &decode_blinded)?;
+
+        // Home unblind decode result
+        let decode_real_output =
+            crate::prib::unblind(&decode_eph_result.output, &decode_request.prib_mask);
+
+        let kv_absorbed = decode_eph_result.kv_produced.len();
+        for chunk in &decode_eph_result.kv_produced {
+            if let Some(pos) = self.kv_store.iter().position(|c| c.chunk_id == chunk.chunk_id) {
+                self.kv_store[pos] = chunk.clone();
+            } else {
+                self.kv_store.push(chunk.clone());
+            }
+        }
+
+        Ok(TwoStageOutsourcedResponse {
+            home_node_id: self.node_id.clone(),
+            prefill_node_id: prefill_receipt.prefill_node_id,
+            decode_node_id: decode_request.target_node_id,
+            output: decode_real_output,
+            tokens_produced: decode_eph_result.tokens_produced,
+            kv_absorbed,
+            kv_migrated,
+        })
+    }
+
     /// Execute locally using the home node's own backend, without outsourcing.
     pub fn execute_local(
         &mut self,
@@ -203,10 +299,7 @@ impl HomeNode {
             candidates: candidates.to_vec(),
         };
         let response = kernel::dispatch(backend, request)?;
-
-        // Absorb KV state from local execution
         self.kv_store = response.exec_response.kv_state.clone();
-
         Ok(response)
     }
 }
@@ -318,4 +411,35 @@ pub struct HomeExecutionResponse {
     pub tokens_produced: u32,
     pub kv_absorbed: usize,
     pub ephemeral_node_id: String,
+}
+
+// ---------------------------------------------------------------------------
+// Two-stage sovereignty objects
+// ---------------------------------------------------------------------------
+
+/// Intermediate state produced after Prefill and passed into Decode.
+/// Held exclusively on the Home Node between stages.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrefillReceipt {
+    pub atom_id: String,
+    pub prefill_node_id: String,
+    pub tokens_produced: u32,
+    /// KV chunks produced by Prefill — carried into Decode stage.
+    pub kv_produced: Vec<KVChunk>,
+    /// Unblinded prefill output, stored on Home Node only.
+    pub prefill_output: Vec<u8>,
+}
+
+/// Final result of a two-stage outsourced execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TwoStageOutsourcedResponse {
+    pub home_node_id: String,
+    pub prefill_node_id: String,
+    pub decode_node_id: String,
+    /// Unblinded final output from the Decode stage.
+    pub output: Vec<u8>,
+    pub tokens_produced: u32,
+    pub kv_absorbed: usize,
+    /// Whether KV was migrated between Prefill and Decode nodes.
+    pub kv_migrated: bool,
 }
