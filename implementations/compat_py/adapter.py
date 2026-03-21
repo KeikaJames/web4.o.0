@@ -8,6 +8,8 @@ and returns an explicit result with an audit entry.
 This is the first real action boundary of the protocol.
 """
 
+import os
+import tempfile
 from typing import Tuple
 
 from implementations.compat_py.path_security import resolve_within_memory_root
@@ -52,6 +54,67 @@ def _check_permission(sac, request: AdapterRequest) -> Tuple[bool, ReasonCode, s
     return True, ReasonCode.SUCCESS, reason
 
 
+def _safe_write(target_path, content_bytes: bytes) -> None:
+    """
+    Atomic, symlink-safe file write.
+
+    1. Create parent directories (exist_ok) — directories themselves are not
+       followed through a symlink race because mkdir is not affected.
+    2. Write to a temp file in the same directory.
+    3. Use os.open() with O_NOFOLLOW on the final path before rename so that
+       if a symlink was planted between resolve() and the write, the open
+       fails with OSError rather than following the link.
+    4. Rename the temp file into place (atomic on POSIX).
+
+    O_NOFOLLOW is POSIX-only.  On Windows (no O_NOFOLLOW) we fall back to the
+    rename-only path, which still defends against most races but not a
+    concurrent symlink replacement — acceptable for a prototype on POSIX.
+    """
+    parent = target_path.parent
+    parent.mkdir(parents=True, exist_ok=True)
+
+    # Write to a temp file first (never follows symlinks at its own path)
+    fd, tmp_path = tempfile.mkstemp(dir=str(parent), prefix=".tmp_")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(content_bytes)
+            f.flush()
+            os.fsync(f.fileno())
+
+        # Before rename, try to open the *final* path with O_NOFOLLOW to
+        # detect a race.  On Linux O_NOFOLLOW | O_PATH is enough; on macOS
+        # O_NOFOLLOW alone works.  If the path doesn't exist yet this open
+        # will fail with FileNotFoundError — that's fine, it just means no
+        # symlink was planted, so we proceed to rename safely.
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        if nofollow:
+            try:
+                probe_fd = os.open(
+                    str(target_path),
+                    os.O_WRONLY | nofollow,
+                )
+                os.close(probe_fd)
+            except FileNotFoundError:
+                pass  # Target doesn't exist yet — clean to create
+            except OSError as exc:
+                # ELOOP (too many levels of symbolic links) or similar — symlink planted
+                import errno as _errno
+                if exc.errno in (_errno.ELOOP, _errno.EEXIST):
+                    raise PermissionError(
+                        f"Symlink detected at target path, write refused: {target_path}"
+                    ) from exc
+                raise
+
+        os.replace(tmp_path, str(target_path))
+        tmp_path = None  # ownership transferred
+    finally:
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
 def file_write(sac, request: AdapterRequest) -> Tuple[AdapterResult, AuditEntry]:
     """
     Governance boundary: agent requests a local file write.
@@ -75,8 +138,17 @@ def file_write(sac, request: AdapterRequest) -> Tuple[AdapterResult, AuditEntry]
         return result, AuditEntry.from_result(request, result)
 
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(request.content, encoding="utf-8")
+        content_bytes = request.content.encode("utf-8")
+        _safe_write(target, content_bytes)
+    except PermissionError as e:
+        result = AdapterResult(
+            performed=False,
+            reason_code=ReasonCode.TARGET_NOT_ALLOWED,
+            message=f"Symlink-safe write refused: {e}",
+            operation=request.operation,
+            target=str(target),
+        )
+        return result, AuditEntry.from_result(request, result)
     except OSError as e:
         result = AdapterResult(
             performed=False,

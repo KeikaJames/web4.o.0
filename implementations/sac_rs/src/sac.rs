@@ -77,6 +77,7 @@ pub struct MemoryRoot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PermissionCage {
     pub allowed_operations: Vec<String>,
     pub financial_daily_limit: Option<f64>,
@@ -214,6 +215,7 @@ impl PermissionCage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DerivedAgent {
     pub agent_id: String,
     pub purpose: String,
@@ -244,6 +246,7 @@ pub struct SACContainer {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SerializedRootKeyMaterial {
     key_id: String,
     key_bytes: String,
@@ -252,6 +255,7 @@ struct SerializedRootKeyMaterial {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SerializedMemoryRoot {
     memory_id: String,
     reference: String,
@@ -259,6 +263,7 @@ struct SerializedMemoryRoot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CryptoEnvelope {
     kdf: String,
     iterations: u32,
@@ -268,6 +273,7 @@ struct CryptoEnvelope {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SerializedSACContainer {
     version: String,
     sac_id: String,
