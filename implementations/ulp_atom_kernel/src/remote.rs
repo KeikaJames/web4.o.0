@@ -14,6 +14,19 @@ pub struct RemoteNode {
     pub endpoint: String,
 }
 
+/// Validate all remote node endpoints in a list before federation.
+///
+/// Call this at the external entry point (e.g. `run_request_remote`) to
+/// prevent SSRF via a polluted node list. Not called from `dispatch_federation`
+/// itself so that integration tests can use local addresses.
+pub fn validate_remote_nodes(nodes: &[RemoteNode]) -> Result<(), String> {
+    for node in nodes {
+        crate::client::validate_endpoint_url(&node.endpoint)
+            .map_err(|e| format!("remote node '{}' endpoint rejected: {}", node.profile.node_id, e))?;
+    }
+    Ok(())
+}
+
 /// Federation dispatch: route locally, then send to chosen remote node
 pub async fn dispatch_federation(
     client: &RemoteClient,

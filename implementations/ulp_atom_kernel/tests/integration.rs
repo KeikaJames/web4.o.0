@@ -3154,6 +3154,7 @@ fn shard_manifest_base_url_works() {
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
+    // Use localhost hostname so SSRF validation in load_shard_from_manifest passes
     let base_url = format!("http://127.0.0.1:{}", addr.port());
 
     thread::spawn(move || {
@@ -3179,7 +3180,7 @@ fn shard_manifest_base_url_works() {
         shard_id: "rel-test".into(),
         source: ShardSource::Http("shard.bin".into()),
         byte_size: Some(4),
-        checksum: None,
+        checksum: Some("4742a4bfe7666c69".into()), // FNV-1a of b"OKAY"
     };
 
     let loaded = load_shard_from_manifest(&shard, &manifest).unwrap();

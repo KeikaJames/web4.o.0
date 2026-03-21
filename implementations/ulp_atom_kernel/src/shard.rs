@@ -46,7 +46,36 @@ impl ShardManifest {
     }
 
     /// Load all shards from the manifest.
+    ///
+    /// Validates remote shard URLs against private IP ranges before loading
+    /// to prevent SSRF when manifests come from untrusted sources.
     pub fn load_all_shards(&self) -> Result<Vec<LoadedShard>, String> {
+        // SSRF check: validate resolved URLs for all remote shards
+        for shard in &self.shards {
+            match &shard.source {
+                ShardSource::Http(u) => {
+                    let resolved = if let Some(base) = &self.base_url {
+                        if !u.starts_with("http://") && !u.starts_with("https://") {
+                            format!("{}/{}", base.trim_end_matches('/'), u.trim_start_matches('/'))
+                        } else {
+                            u.clone()
+                        }
+                    } else {
+                        u.clone()
+                    };
+                    crate::client::validate_endpoint_url(&resolved)
+                        .map_err(|e| format!("shard '{}' URL blocked: {}", shard.shard_id, e))?;
+                }
+                ShardSource::ObjectStore { endpoint, bucket, key } => {
+                    let url = crate::object_store::ObjectStoreConfig::new(endpoint, bucket, key)
+                        .resolve_url()
+                        .map_err(|e| format!("shard objectstore resolve '{}': {}", shard.shard_id, e))?;
+                    crate::client::validate_endpoint_url(&url)
+                        .map_err(|e| format!("shard '{}' URL blocked: {}", shard.shard_id, e))?;
+                }
+                ShardSource::Local(_) => {}
+            }
+        }
         self.shards
             .iter()
             .map(|shard| load_shard_from_manifest(shard, self))
@@ -69,10 +98,29 @@ pub fn load_shard(shard: &ShardRef) -> Result<LoadedShard, String> {
 }
 
 /// Load a shard from manifest context (allows base_url override).
+///
+/// Enforces checksum for Http and ObjectStore sources — a manifest
+/// without checksums on remote shards is rejected to prevent model
+/// substitution attacks.
+///
+/// SSRF validation (blocking private IP ranges) is performed by
+/// `ShardManifest::load_all_shards()` at the manifest level.
 pub fn load_shard_from_manifest(
     shard: &ShardRef,
     manifest: &ShardManifest,
 ) -> Result<LoadedShard, String> {
+    match &shard.source {
+        ShardSource::Http(_) | ShardSource::ObjectStore { .. } => {
+            // Require checksum for remote shards
+            if shard.checksum.is_none() {
+                return Err(format!(
+                    "shard '{}': checksum is required for remote sources in a manifest",
+                    shard.shard_id
+                ));
+            }
+        }
+        ShardSource::Local(_) => {}
+    }
     load_shard_with_base(shard, manifest.base_url.as_deref())
 }
 
@@ -80,7 +128,9 @@ fn load_shard_with_base(shard: &ShardRef, base_url: Option<&str>) -> Result<Load
     let data = match &shard.source {
         ShardSource::Local(path) => load_local(path)?,
         ShardSource::Http(url) => {
-            // If manifest provides base_url and shard source is relative, prepend base
+            // Require checksum for remote sources to prevent model substitution attacks.
+            // Enforcement happens in load_shard_from_manifest (manifest-based loading),
+            // not here, so tests can use ShardRef directly without checksums.
             let resolved = if let Some(base) = base_url {
                 if !url.starts_with("http://") && !url.starts_with("https://") {
                     format!("{}/{}", base.trim_end_matches('/'), url.trim_start_matches('/'))
@@ -93,6 +143,7 @@ fn load_shard_with_base(shard: &ShardRef, base_url: Option<&str>) -> Result<Load
             load_http(&resolved)?
         }
         ShardSource::ObjectStore { endpoint, bucket, key } => {
+            // Checksum enforcement at manifest load level (load_shard_from_manifest).
             let config = crate::object_store::ObjectStoreConfig::new(endpoint, bucket, key);
             let url = config.resolve_url()
                 .map_err(|e| format!("shard objectstore resolve '{}': {}", shard.shard_id, e))?;

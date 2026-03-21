@@ -5,7 +5,7 @@ use crate::exec::*;
 use crate::kernel::*;
 use crate::kv::*;
 use crate::pipeline::execute_two_stage;
-use crate::remote::{dispatch_federation, RemoteNode};
+use crate::remote::{dispatch_federation, validate_remote_nodes, RemoteNode};
 use crate::router::*;
 use crate::sac_bridge::*;
 
@@ -92,6 +92,9 @@ pub async fn run_request_remote(
 
     let remote_nodes: Vec<RemoteNode> = serde_json::from_str(remote_nodes_json)
         .map_err(|e| format!("parse remote nodes: {e}"))?;
+
+    // Validate remote node endpoints to prevent SSRF via untrusted node lists
+    validate_remote_nodes(&remote_nodes)?;
 
     let kv_state = match kv_json {
         Some(kj) => serde_json::from_str::<Vec<KVChunk>>(kj)
