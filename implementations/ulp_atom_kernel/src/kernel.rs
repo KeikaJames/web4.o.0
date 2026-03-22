@@ -88,17 +88,23 @@ pub fn dispatch(
         .map(|n| n.region.clone())
         .unwrap_or(target_region);
 
-    // 2. migrate KV chunks that need to move
+    // 2. migrate KV chunks based on transport decision
     let mut migrations = Vec::new();
     let mut migrated_chunks = Vec::new();
-    for chunk in request.kv_state {
-        if chunk.source_region != target_region {
-            let (moved, receipt) = backend.migrate_kv(chunk, target_region.clone())?;
-            migrations.push(receipt);
-            migrated_chunks.push(moved);
-        } else {
-            migrated_chunks.push(chunk);
+
+    if placement.should_transfer_kv {
+        for chunk in request.kv_state {
+            if chunk.source_region != target_region {
+                let (moved, receipt) = backend.migrate_kv(chunk, target_region.clone())?;
+                migrations.push(receipt);
+                migrated_chunks.push(moved);
+            } else {
+                migrated_chunks.push(chunk);
+            }
         }
+    } else {
+        // Recompute path: don't transfer KV, pass empty state
+        migrated_chunks = vec![];
     }
 
     // 3. execute via backend

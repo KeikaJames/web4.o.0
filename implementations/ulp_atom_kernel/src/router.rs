@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::atom::{AtomKind, ComputeAtom, Region};
 use crate::capacity::NodeCapacity;
-use crate::kv::{self, KVChunk};
+use crate::kv::KVChunk;
 use crate::link::{Link, Direction, should_transfer};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +55,7 @@ pub struct PlacementDecision {
     pub breakdown: PlacementBreakdown,
     pub requires_kv_migration: bool,
     pub estimated_migration_cost: f64,
+    pub should_transfer_kv: bool,
 }
 
 /// Context the router uses to factor in KV state locality.
@@ -89,21 +90,9 @@ fn weights_for(atom: &ComputeAtom) -> Weights {
 fn score_node(atom: &ComputeAtom, node: &NodeProfile, kv_ctx: Option<&KVContext>) -> PlacementBreakdown {
     let w = weights_for(atom);
 
-    // Model mismatch filter
-    if let Some(ref model_id) = node.base_model_id {
-        if model_id != &atom.model_id {
-            return PlacementBreakdown {
-                node_id: node.node_id.clone(), final_score: 0.0, latency_score: 0.0,
-                hotness_score: 0.0, engine_score: 0.0, specialization_score: 0.0,
-                kv_locality_score: 0.0, sovereignty_score: 0.0, migration_cost: 0.0,
-                capacity_score: 0.0,
-            };
-        }
-    }
-
     let latency_score = 1.0 / (1.0 + node.latency_ms / 100.0);
     let hotness_score = node.hotness;
-    let engine_score = if node.supported_kinds.contains(&atom.kind) { 1.0 } else { 0.0 };
+    let engine_score = 1.0;
 
     let specialization_score = match atom.kind {
         AtomKind::Prefill => node.prefill_affinity,
@@ -171,22 +160,53 @@ pub fn route(atom: &ComputeAtom, candidates: &[NodeProfile]) -> Option<Placement
 pub fn route_with_kv(
     atom: &ComputeAtom, candidates: &[NodeProfile], kv_ctx: Option<&KVContext>,
 ) -> Option<PlacementDecision> {
-    let best = candidates.iter().map(|n| {
-        let mut breakdown = score_node(atom, n, kv_ctx);
-        let mc: f64 = match kv_ctx {
-            Some(ctx) => {
-                let raw: f64 = ctx.active_chunks.iter()
-                    .filter(|c| c.source_region != n.region)
-                    .map(|c| kv::migration_cost(c, &n.region)).sum();
-                if raw == 0.0 { 0.0 } else { raw }
+    let total_kv_bytes: usize = kv_ctx.map(|ctx| ctx.active_chunks.iter().map(|c| c.byte_size).sum()).unwrap_or(0);
+
+    let compatible: Vec<_> = candidates.iter().filter(|n| {
+        // Hard constraint: model must match
+        if let Some(ref model_id) = n.base_model_id {
+            if model_id != &atom.model_id {
+                return false;
             }
-            None => 0.0,
+        }
+        // Hard constraint: must support atom kind
+        if !n.supported_kinds.contains(&atom.kind) {
+            return false;
+        }
+        // Hard constraint: KV capacity must be sufficient
+        if total_kv_bytes > n.kv_capacity_bytes {
+            return false;
+        }
+        true
+    }).collect();
+
+    if compatible.is_empty() {
+        return None;
+    }
+
+    let best = compatible.iter().map(|n| {
+        let mut breakdown = score_node(atom, n, kv_ctx);
+        let (mc, should_transfer) = match kv_ctx {
+            Some(ctx) if !ctx.active_chunks.is_empty() => {
+                let link = if n.region.0.starts_with("dc-") { Link::datacenter() } else { Link::p2p() };
+                let should = should_transfer(total_kv_bytes, &link, Direction::Download, n.compute_flops, false);
+                let cost = if should {
+                    link.transfer_cost(total_kv_bytes, Direction::Download)
+                } else {
+                    crate::link::recompute_cost_kv(total_kv_bytes, n.compute_flops)
+                };
+                (cost, should)
+            }
+            _ => (0.0, false),
         };
         breakdown.migration_cost = mc;
-        (breakdown, mc > 0.0, mc)
+        (breakdown, mc > 0.0, mc, should_transfer)
     }).max_by(|a, b| a.0.final_score.partial_cmp(&b.0.final_score).unwrap())?;
 
     Some(PlacementDecision {
-        breakdown: best.0, requires_kv_migration: best.1, estimated_migration_cost: best.2,
+        breakdown: best.0,
+        requires_kv_migration: best.1,
+        estimated_migration_cost: best.2,
+        should_transfer_kv: best.3,
     })
 }

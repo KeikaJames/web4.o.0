@@ -72,8 +72,7 @@ impl HomeNode {
             kind: atom.kind.clone(),
             model_id: atom.model_id.clone(),
             input,
-            // Only include KV chunks that need migration to the target region
-            kv_chunks: if decision.requires_kv_migration {
+            kv_chunks: if decision.should_transfer_kv {
                 self.kv_store.clone()
             } else {
                 Vec::new()
@@ -130,8 +129,8 @@ impl HomeNode {
             atom_id: atom.id.clone(),
             kind: atom.kind.clone(),
             model_id: atom.model_id.clone(),
-            input: blinded_input, // ephemeral node only sees this
-            kv_chunks: if decision.requires_kv_migration {
+            input: blinded_input,
+            kv_chunks: if decision.should_transfer_kv {
                 self.kv_store.clone()
             } else {
                 Vec::new()
