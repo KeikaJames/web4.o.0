@@ -7,7 +7,7 @@ Version: 0.1
 
 ## Abstract
 
-Compatibility Layer lets Web4.0 Agents call existing systems.
+Compatibility Layer lets Efferva Agents call existing systems.
 It is not a core layer. It is a compatibility layer.
 
 Old systems are resource layers, not sovereignty layers.

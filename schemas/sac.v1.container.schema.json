@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://github.com/KeikaJames/web4.o/schemas/sac.v1.container.schema.json",
+  "$id": "https://github.com/KeikaJames/Efferva/schemas/sac.v1.container.schema.json",
   "title": "SAC v1 Container (local)",
   "description": "Full local SAC container. Contains secret material. Never transmit.",
   "type": "object",

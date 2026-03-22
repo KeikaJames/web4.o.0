@@ -1,4 +1,4 @@
-# RFC 0002: Web4.0 Core Axioms
+# RFC 0002: Efferva Core Axioms
 
 Status: Draft
 Created: 2026-03-18
@@ -7,7 +7,7 @@ Created: 2026-03-18
 
 ## Abstract
 
-This RFC defines the core axioms of Web4.0 / ULP.
+This RFC defines the core axioms of Efferva.
 These axioms constrain all subsequent protocol specifications.
 
 ---
@@ -63,7 +63,7 @@ Constraint:
 
 ### Axiom 6: Replacement Over Patching
 
-Web4.0 advances by replacing old protocol fulcrums, not by patching old systems.
+Efferva advances by replacing old protocol fulcrums, not by patching old systems.
 
 Constraint:
 - New protocols must rewrite necessary functions of old protocols

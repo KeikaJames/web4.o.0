@@ -121,7 +121,7 @@ Compatibility targets:
 - App ecosystems
 
 Principle:
-Web4.0 can call the old world.
+Efferva can call the old world.
 The old world cannot remain the only sovereignty entry point.
 
 See [specs/compatibility-layer.md](../specs/compatibility-layer.md)

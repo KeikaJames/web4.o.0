@@ -2,7 +2,7 @@
 
 ## Our Commitment
 
-Web4.0 / ULP is a protocol project built on principles of openness, sovereignty, and respect.
+Efferva is a protocol project built on principles of openness, sovereignty, and respect.
 
 We are committed to providing a welcoming environment for all contributors, regardless of background, identity, or experience level.
 
@@ -56,4 +56,4 @@ This Code of Conduct is adapted from common open-source community standards.
 
 ---
 
-**Web4.0 is built on respect for individual sovereignty. That starts here.**
+**Efferva is built on respect for individual sovereignty. That starts here.**

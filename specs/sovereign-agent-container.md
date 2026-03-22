@@ -7,7 +7,7 @@ Version: 0.1
 
 ## Abstract
 
-Sovereign Agent Container (SAC) is the sovereignty layer of Web4.0.
+Sovereign Agent Container (SAC) is the sovereignty layer of Efferva.
 It is not a platform account, not a cloud profile, not a wallet UI.
 It is a user-controlled container that holds Agent state, keys, memory references, and permissions.
 

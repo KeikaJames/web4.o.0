@@ -1,6 +1,6 @@
 # Protocol Specifications
 
-This directory contains protocol specifications for Web4.0 / ULP.
+This directory contains protocol specifications for Efferva.
 
 ---
 
@@ -38,7 +38,7 @@ Defines how collective intelligence circulates without centralization.
 ### 5. Compatibility Layer
 [compatibility-layer.md](compatibility-layer.md)
 
-Defines how Web4.0 interoperates with existing systems.
+Defines how Efferva interoperates with existing systems.
 
 ---
 

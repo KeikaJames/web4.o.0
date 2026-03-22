@@ -1,4 +1,4 @@
-# Web4.0 / ULP
+# Efferva
 
 Protocol for sovereign Agent ownership.
 
@@ -57,7 +57,7 @@ See [docs/architecture-overview.md](docs/architecture-overview.md) for details.
 
 ## Current Status
 
-Early stage: SAC draft spec and reference implementations (Python, Rust) exist. Compatibility layer prototype demonstrates SAC-backed Agents acting into existing systems. ULP atom kernel implements multi-node routing with KV-locality awareness.
+Early stage: SAC draft spec and reference implementations (Python, Rust) exist. Compatibility layer prototype demonstrates SAC-backed Agents acting into existing systems. The atom kernel prototype implements multi-node routing with KV-locality awareness.
 
 Reference implementations are prototypes, not production-ready.
 
@@ -85,4 +85,4 @@ MIT. See [LICENSE](LICENSE).
 
 ---
 
-Web4.0 advances by replacement.
+Efferva advances by replacement.

@@ -10,7 +10,11 @@ pub enum ShardSource {
     Local(String),
     Http(String),
     /// Object store: endpoint/bucket/key structure
-    ObjectStore { endpoint: String, bucket: String, key: String },
+    ObjectStore {
+        endpoint: String,
+        bucket: String,
+        key: String,
+    },
 }
 
 /// Reference to a shard — enough to locate and load it.
@@ -50,31 +54,8 @@ impl ShardManifest {
     /// Validates remote shard URLs against private IP ranges before loading
     /// to prevent SSRF when manifests come from untrusted sources.
     pub fn load_all_shards(&self) -> Result<Vec<LoadedShard>, String> {
-        // SSRF check: validate resolved URLs for all remote shards
         for shard in &self.shards {
-            match &shard.source {
-                ShardSource::Http(u) => {
-                    let resolved = if let Some(base) = &self.base_url {
-                        if !u.starts_with("http://") && !u.starts_with("https://") {
-                            format!("{}/{}", base.trim_end_matches('/'), u.trim_start_matches('/'))
-                        } else {
-                            u.clone()
-                        }
-                    } else {
-                        u.clone()
-                    };
-                    crate::client::validate_endpoint_url(&resolved)
-                        .map_err(|e| format!("shard '{}' URL blocked: {}", shard.shard_id, e))?;
-                }
-                ShardSource::ObjectStore { endpoint, bucket, key } => {
-                    let url = crate::object_store::ObjectStoreConfig::new(endpoint, bucket, key)
-                        .resolve_url()
-                        .map_err(|e| format!("shard objectstore resolve '{}': {}", shard.shard_id, e))?;
-                    crate::client::validate_endpoint_url(&url)
-                        .map_err(|e| format!("shard '{}' URL blocked: {}", shard.shard_id, e))?;
-                }
-                ShardSource::Local(_) => {}
-            }
+            validate_remote_shard(shard, self.base_url.as_deref())?;
         }
         self.shards
             .iter()
@@ -94,6 +75,15 @@ pub struct LoadedShard {
 
 /// Load a shard from its source. Supports local filesystem and plain HTTP.
 pub fn load_shard(shard: &ShardRef) -> Result<LoadedShard, String> {
+    validate_remote_shard(shard, None)?;
+    load_shard_with_base(shard, None)
+}
+
+/// Explicitly load a shard without endpoint trust checks.
+///
+/// This is intended only for tests and trusted local development flows.
+pub fn load_shard_trusted(shard: &ShardRef) -> Result<LoadedShard, String> {
+    require_remote_checksum(shard)?;
     load_shard_with_base(shard, None)
 }
 
@@ -103,24 +93,24 @@ pub fn load_shard(shard: &ShardRef) -> Result<LoadedShard, String> {
 /// without checksums on remote shards is rejected to prevent model
 /// substitution attacks.
 ///
-/// SSRF validation (blocking private IP ranges) is performed by
-/// `ShardManifest::load_all_shards()` at the manifest level.
+/// SSRF validation (blocking private / loopback resolution) is enforced
+/// on every call.
 pub fn load_shard_from_manifest(
     shard: &ShardRef,
     manifest: &ShardManifest,
 ) -> Result<LoadedShard, String> {
-    match &shard.source {
-        ShardSource::Http(_) | ShardSource::ObjectStore { .. } => {
-            // Require checksum for remote shards
-            if shard.checksum.is_none() {
-                return Err(format!(
-                    "shard '{}': checksum is required for remote sources in a manifest",
-                    shard.shard_id
-                ));
-            }
-        }
-        ShardSource::Local(_) => {}
-    }
+    validate_remote_shard(shard, manifest.base_url.as_deref())?;
+    load_shard_with_base(shard, manifest.base_url.as_deref())
+}
+
+/// Explicitly load a manifest shard without endpoint trust checks.
+///
+/// This keeps checksum enforcement but allows trusted local loopback endpoints.
+pub fn load_shard_from_manifest_trusted(
+    shard: &ShardRef,
+    manifest: &ShardManifest,
+) -> Result<LoadedShard, String> {
+    require_remote_checksum(shard)?;
     load_shard_with_base(shard, manifest.base_url.as_deref())
 }
 
@@ -128,24 +118,17 @@ fn load_shard_with_base(shard: &ShardRef, base_url: Option<&str>) -> Result<Load
     let data = match &shard.source {
         ShardSource::Local(path) => load_local(path)?,
         ShardSource::Http(url) => {
-            // Require checksum for remote sources to prevent model substitution attacks.
-            // Enforcement happens in load_shard_from_manifest (manifest-based loading),
-            // not here, so tests can use ShardRef directly without checksums.
-            let resolved = if let Some(base) = base_url {
-                if !url.starts_with("http://") && !url.starts_with("https://") {
-                    format!("{}/{}", base.trim_end_matches('/'), url.trim_start_matches('/'))
-                } else {
-                    url.to_string()
-                }
-            } else {
-                url.to_string()
-            };
+            let resolved = resolve_http_url(url, base_url);
             load_http(&resolved)?
         }
-        ShardSource::ObjectStore { endpoint, bucket, key } => {
-            // Checksum enforcement at manifest load level (load_shard_from_manifest).
+        ShardSource::ObjectStore {
+            endpoint,
+            bucket,
+            key,
+        } => {
             let config = crate::object_store::ObjectStoreConfig::new(endpoint, bucket, key);
-            let url = config.resolve_url()
+            let url = config
+                .resolve_url()
                 .map_err(|e| format!("shard objectstore resolve '{}': {}", shard.shard_id, e))?;
             load_http(&url)?
         }
@@ -156,7 +139,9 @@ fn load_shard_with_base(shard: &ShardRef, base_url: Option<&str>) -> Result<Load
         if data.len() as u64 != expected_size {
             return Err(format!(
                 "shard '{}' size mismatch: expected {} bytes, got {}",
-                shard.shard_id, expected_size, data.len()
+                shard.shard_id,
+                expected_size,
+                data.len()
             ));
         }
     }
@@ -198,7 +183,10 @@ fn load_http(url: &str) -> Result<Vec<u8>, String> {
     } else if let Some(r) = url.strip_prefix("http://") {
         ("http", r)
     } else {
-        return Err(format!("shard load http: only http:// and https:// supported, got '{}'", url));
+        return Err(format!(
+            "shard load http: only http:// and https:// supported, got '{}'",
+            url
+        ));
     };
 
     let (host_port, path) = match raw.find('/') {
@@ -222,9 +210,7 @@ fn load_http(url: &str) -> Result<Vec<u8>, String> {
 
     let mut stream = TcpStream::connect_timeout(&sock_addr, Duration::from_secs(5))
         .map_err(|e| format!("shard http connect '{}': {}", addr, e))?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .ok();
+    stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
 
     // For https, wrap in TLS
     let mut buf = Vec::new();
@@ -235,7 +221,8 @@ fn load_http(url: &str) -> Result<Vec<u8>, String> {
             .map_err(|e| format!("shard https tls setup: {}", e))?;
 
         let host_name = host_port.split(':').next().unwrap_or(host_port);
-        let mut tls_stream = connector.connect(host_name, stream)
+        let mut tls_stream = connector
+            .connect(host_name, stream)
             .map_err(|e| format!("shard https tls connect: {}", e))?;
 
         let req = format!(
@@ -272,7 +259,9 @@ fn load_http(url: &str) -> Result<Vec<u8>, String> {
     let header = std::str::from_utf8(&buf[..hdr_end])
         .map_err(|_| "shard http: invalid UTF-8 in response header".to_string())?;
 
-    let status_line = header.lines().next()
+    let status_line = header
+        .lines()
+        .next()
         .ok_or_else(|| "shard http: empty response".to_string())?;
 
     // Status line format: "HTTP/1.x STATUS_CODE REASON"
@@ -300,4 +289,58 @@ fn simple_checksum(data: &[u8]) -> String {
         hash = hash.wrapping_mul(FNV_PRIME);
     }
     format!("{:016x}", hash)
+}
+
+fn resolve_http_url(url: &str, base_url: Option<&str>) -> String {
+    if let Some(base) = base_url {
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            return format!(
+                "{}/{}",
+                base.trim_end_matches('/'),
+                url.trim_start_matches('/')
+            );
+        }
+    }
+    url.to_string()
+}
+
+fn require_remote_checksum(shard: &ShardRef) -> Result<(), String> {
+    match &shard.source {
+        ShardSource::Http(_) | ShardSource::ObjectStore { .. } => {
+            if shard.checksum.is_none() {
+                return Err(format!(
+                    "shard '{}': checksum is required for remote sources",
+                    shard.shard_id
+                ));
+            }
+        }
+        ShardSource::Local(_) => {}
+    }
+    Ok(())
+}
+
+fn validate_remote_shard(shard: &ShardRef, base_url: Option<&str>) -> Result<(), String> {
+    require_remote_checksum(shard)?;
+
+    match &shard.source {
+        ShardSource::Http(url) => {
+            let resolved = resolve_http_url(url, base_url);
+            crate::client::validate_endpoint_url(&resolved)
+                .map_err(|e| format!("shard '{}' URL blocked: {}", shard.shard_id, e))?;
+        }
+        ShardSource::ObjectStore {
+            endpoint,
+            bucket,
+            key,
+        } => {
+            let url = crate::object_store::ObjectStoreConfig::new(endpoint, bucket, key)
+                .resolve_url()
+                .map_err(|e| format!("shard objectstore resolve '{}': {}", shard.shard_id, e))?;
+            crate::client::validate_endpoint_url(&url)
+                .map_err(|e| format!("shard '{}' URL blocked: {}", shard.shard_id, e))?;
+        }
+        ShardSource::Local(_) => {}
+    }
+
+    Ok(())
 }

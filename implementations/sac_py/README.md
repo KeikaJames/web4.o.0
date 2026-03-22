@@ -45,7 +45,7 @@ Requires Python 3.11+
 pip install pytest
 
 # Run from repository root
-cd /path/to/web4.0
+cd /path/to/Efferva
 ```
 
 ## Usage
@@ -181,5 +181,5 @@ Future work:
 ## References
 
 - [specs/sovereign-agent-container.md](../../specs/sovereign-agent-container.md)
-- [RFC 0002: Web4.0 Core Axioms](../../rfcs/0002-web4-core-axioms.md)
+- [RFC 0002: Efferva Core Axioms](../../rfcs/0002-web4-core-axioms.md)
 - [docs/architecture-overview.md](../../docs/architecture-overview.md)

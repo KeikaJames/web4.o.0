@@ -1,4 +1,4 @@
-# Contributing to Web4.0 / ULP
+# Contributing to Efferva
 
 We welcome contributions that advance the protocol's core mission: enabling sovereign Agent ownership and federated intelligence circulation.
 
@@ -6,7 +6,7 @@ We welcome contributions that advance the protocol's core mission: enabling sove
 
 ## What We're Building
 
-Web4.0 / ULP is a protocol project, not a platform or product company.
+Efferva is a protocol project, not a platform or product company.
 
 Contributions should align with these goals:
 - **Sovereign Agent ownership**: every person controls their own Agent
@@ -138,4 +138,4 @@ We value thoughtful contributions over fast contributions.
 
 ---
 
-**Remember: Web4.0 advances by replacement, not by patching the old order.**
+**Remember: Efferva advances by replacement, not by patching the old order.**

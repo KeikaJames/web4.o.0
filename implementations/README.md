@@ -1,6 +1,6 @@
 # Reference Implementations
 
-This directory contains reference implementations of Web4.0 / ULP protocols.
+This directory contains reference implementations of Efferva protocols.
 
 ## Status
 

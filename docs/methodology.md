@@ -1,6 +1,6 @@
 # Methodology: Replacement Over Patching
 
-Web4.0 advances by replacing old protocol fulcrums, not by patching old systems.
+Efferva advances by replacing old protocol fulcrums, not by patching old systems.
 
 ---
 
@@ -126,4 +126,4 @@ Result:
 
 ---
 
-Web4.0 advances by replacement.
+Efferva advances by replacement.

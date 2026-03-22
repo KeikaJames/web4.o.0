@@ -34,7 +34,7 @@ Past systems were built on enclosure:
 - Enclose model capabilities
 - Enclose service access
 
-Web4.0 is built on circulation:
+Efferva is built on circulation:
 - Intelligence flows by use
 - Compute is accessed openly
 - Capabilities compose on demand
@@ -80,7 +80,7 @@ Platform monopoly is.
 
 ## Replacement, Not Patching
 
-Web4.0 does not declare old protocols dead.
+Efferva does not declare old protocols dead.
 It makes them irrelevant by offering replacements.
 
 Method:
@@ -96,7 +96,7 @@ Not patching. Replacing.
 ## Where New Hierarchies Grow
 
 Every technical revolution grows new hierarchies.
-Web4.0 will too.
+Efferva will too.
 
 Keep asking:
 - Do new actors re-enclose intelligence?
@@ -107,4 +107,4 @@ If yes, replace again.
 
 ---
 
-Web4.0 is built by replacement.
+Efferva is built by replacement.

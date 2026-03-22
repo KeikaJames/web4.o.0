@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://github.com/KeikaJames/web4.o/schemas/sac.v1.metadata.schema.json",
+  "$id": "https://github.com/KeikaJames/Efferva/schemas/sac.v1.metadata.schema.json",
   "title": "SAC v1 Metadata (exportable)",
   "description": "Exportable SAC metadata. No secret material. Safe to share.",
   "type": "object",

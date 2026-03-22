@@ -35,7 +35,10 @@ fn test_create_sac() {
     assert_eq!(sac.memory_root.reference, "./memory");
     assert_eq!(
         sac.permissions.allowed_operations,
-        vec!["file.write".to_string(), "financial.transaction".to_string()]
+        vec![
+            "file.write".to_string(),
+            "financial.transaction".to_string()
+        ]
     );
 }
 
@@ -56,7 +59,10 @@ fn test_save_and_load_encrypts_at_rest() {
         raw["root_key"]["key_bytes"].as_str().unwrap(),
         base64::engine::general_purpose::STANDARD.encode(&original_key_bytes)
     );
-    assert_ne!(raw["memory_root"]["reference"].as_str().unwrap(), "./memory");
+    assert_ne!(
+        raw["memory_root"]["reference"].as_str().unwrap(),
+        "./memory"
+    );
     assert_eq!(loaded.root_key.key_bytes, original_key_bytes);
 }
 
@@ -92,7 +98,10 @@ fn test_derive_agent_and_revoke() {
         .derive_agent_with_permissions("email-handler", child_permissions)
         .unwrap();
 
-    assert_eq!(agent.permissions.allowed_operations, vec!["file.write".to_string()]);
+    assert_eq!(
+        agent.permissions.allowed_operations,
+        vec!["file.write".to_string()]
+    );
     sac.revoke_agent(&agent.agent_id).unwrap();
 
     let mut ctx = HashMap::new();
@@ -106,7 +115,10 @@ fn test_derive_agent_rejects_permission_escalation() {
     sac.permissions.allowed_operations = vec!["file.write".to_string()];
 
     let child = PermissionCage {
-        allowed_operations: vec!["file.write".to_string(), "financial.transaction".to_string()],
+        allowed_operations: vec![
+            "file.write".to_string(),
+            "financial.transaction".to_string(),
+        ],
         financial_daily_limit: None,
         financial_single_tx_limit: None,
         actions_require_confirmation: Vec::new(),
@@ -133,7 +145,10 @@ fn test_derive_agent_can_disable_parent_limited_operation() {
     let agent = sac
         .derive_agent_with_permissions("write-only", child)
         .expect("child that disables financial access should still be valid");
-    assert_eq!(agent.permissions.allowed_operations, vec!["file.write".to_string()]);
+    assert_eq!(
+        agent.permissions.allowed_operations,
+        vec!["file.write".to_string()]
+    );
 }
 
 #[test]
@@ -168,10 +183,14 @@ fn test_permission_limits_and_confirmation() {
     let mut tx_ctx = HashMap::new();
     tx_ctx.insert("amount".to_string(), serde_json::json!(500.0));
     tx_ctx.insert("daily_total".to_string(), serde_json::json!(3000.0));
-    assert!(sac.check_permission("financial.transaction", &tx_ctx).is_ok());
+    assert!(sac
+        .check_permission("financial.transaction", &tx_ctx)
+        .is_ok());
 
     tx_ctx.insert("amount".to_string(), serde_json::json!(2500.0));
-    assert!(sac.check_permission("financial.transaction", &tx_ctx).is_err());
+    assert!(sac
+        .check_permission("financial.transaction", &tx_ctx)
+        .is_err());
 
     let write_ctx = HashMap::new();
     assert!(sac.check_permission("file.write", &write_ctx).is_err());
@@ -228,15 +247,20 @@ fn test_save_load_preserves_derived_agents() {
 
     assert_eq!(loaded.derived_agents.len(), 2);
     assert_eq!(
-        loaded.derived_agents[1].permissions.actions_require_confirmation,
+        loaded.derived_agents[1]
+            .permissions
+            .actions_require_confirmation,
         vec!["file.write".to_string()]
     );
 }
 
 #[test]
 fn test_fixture_loads() {
-    let sac = SACContainer::load(fixtures_dir().join("python_generated.json"), TEST_PASSPHRASE)
-        .expect("Rust must load Python-generated SAC");
+    let sac = SACContainer::load(
+        fixtures_dir().join("python_generated.json"),
+        TEST_PASSPHRASE,
+    )
+    .expect("Rust must load Python-generated SAC");
     assert_eq!(sac.memory_root.reference, "./memory");
     assert_eq!(sac.derived_agents.len(), 1);
 
@@ -291,6 +315,27 @@ fn test_container_schema_rejects_missing_crypto() {
     data.as_object_mut().unwrap().remove("crypto");
     let validator = jsonschema::validator_for(&schema).unwrap();
     assert!(validator.iter_errors(&data).next().is_some());
+}
+
+#[test]
+fn test_load_rejects_extra_top_level_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("extra-field.json");
+
+    let sac = SACContainer::create("./memory");
+    sac.save(&path, TEST_PASSPHRASE).unwrap();
+
+    let mut data: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    data["persona"] = serde_json::json!("bad");
+    std::fs::write(&path, serde_json::to_string_pretty(&data).unwrap()).unwrap();
+
+    let err = SACContainer::load(&path, TEST_PASSPHRASE).unwrap_err();
+    let rendered = format!("{:?}", err);
+    assert!(
+        rendered.contains("unknown field") || rendered.contains("persona"),
+        "unexpected error: {rendered}"
+    );
 }
 
 #[test]
