@@ -89,9 +89,12 @@ pub struct SlotOffer {
     /// If None, this is a local-only node.
     #[serde(default)]
     pub endpoint: Option<String>,
-    /// KV availability hint for mesh-ready coordination.
+    /// KV availability hint for mesh-ready coordination (legacy bool).
     #[serde(default)]
     pub kv_available: bool,
+    /// Structured KV availability descriptors.
+    #[serde(default)]
+    pub kv_availability: Vec<crate::sovereignty::KVAvailability>,
     /// Minimal capabilities descriptor.
     #[serde(default)]
     pub capabilities: Vec<String>,
@@ -200,11 +203,13 @@ impl DiscoveryPool {
 
     /// Return candidates with federated hints considered.
     /// Prioritizes candidates with kv_available for Decode, filters by capabilities.
+    /// If handoff_id is provided, prioritizes nodes with matching KV availability.
     pub fn candidates_with_hints(
         &self,
         kind: &AtomKind,
         region: Option<&Region>,
         prefer_kv: bool,
+        handoff_id: Option<&str>,
     ) -> Vec<&SlotOffer> {
         let mut candidates: Vec<&SlotOffer> = self
             .offers
@@ -215,7 +220,22 @@ impl DiscoveryPool {
             .collect();
 
         if prefer_kv {
-            candidates.sort_by_key(|o| if o.kv_available { 0 } else { 1 });
+            if let Some(hid) = handoff_id {
+                // Prioritize nodes with matching handoff_id in kv_availability
+                candidates.sort_by_key(|o| {
+                    let has_handoff = o.kv_availability.iter().any(|kv| kv.handoff_id == hid);
+                    if has_handoff {
+                        0
+                    } else if o.kv_available {
+                        1
+                    } else {
+                        2
+                    }
+                });
+            } else {
+                // Fallback to legacy bool
+                candidates.sort_by_key(|o| if o.kv_available { 0 } else { 1 });
+            }
         }
 
         candidates
@@ -331,7 +351,7 @@ pub async fn claim_slot_http(
     nonce_seed: u64,
     timeout_ms: u64,
 ) -> Result<ClaimedSlot, String> {
-    claim_slot_http_with_hints(client, pool, home_node_id, kind, region, nonce_seed, timeout_ms, false).await
+    claim_slot_http_with_hints(client, pool, home_node_id, kind, region, nonce_seed, timeout_ms, false, None).await
 }
 
 pub async fn claim_slot_http_with_hints(
@@ -343,8 +363,9 @@ pub async fn claim_slot_http_with_hints(
     nonce_seed: u64,
     timeout_ms: u64,
     prefer_kv: bool,
+    handoff_id: Option<&str>,
 ) -> Result<ClaimedSlot, String> {
-    let candidates = pool.candidates_with_hints(kind, region, prefer_kv);
+    let candidates = pool.candidates_with_hints(kind, region, prefer_kv, handoff_id);
     if candidates.is_empty() {
         return Err("discovery pool: no candidates available".to_string());
     }

@@ -346,6 +346,31 @@ impl HomeNode {
         }
     }
 
+    /// Query KV availability for a handoff ID.
+    pub fn query_kv_availability(&self, handoff_id: &str) -> Option<KVAvailability> {
+        self.kv_locations.iter().find(|l| l.handoff_id == handoff_id).map(|loc| {
+            KVAvailability {
+                handoff_id: loc.handoff_id.clone(),
+                node_id: loc.node_id.clone(),
+                scope: loc.scope.clone(),
+                chunk_summary: loc.chunk_summary,
+                owner_hint: Some(self.node_id.clone()),
+            }
+        })
+    }
+
+    /// Register KV from handoff into home index.
+    pub fn register_kv_from_handoff(&mut self, handoff: &KVHandoff, _source_node: &str) {
+        let location = KVLocation {
+            handoff_id: handoff.metadata.handoff_id.clone(),
+            scope: KVStorageScope::HomeLocal,
+            node_id: self.node_id.clone(),
+            retrieval_hint: None,
+            chunk_summary: (handoff.metadata.chunk_count, handoff.metadata.total_bytes),
+        };
+        self.register_kv_location(location);
+    }
+
     fn finish_result(
         &mut self,
         home_node_id: &str,
@@ -388,6 +413,7 @@ impl HomeNode {
                 pool,
                 nonce_seed,
                 timeout_ms,
+                None,
             )
             .await?;
 
@@ -420,6 +446,7 @@ impl HomeNode {
                 pool,
                 prefill_nonce_seed,
                 timeout_ms,
+                None,
             )
             .await?;
 
@@ -440,6 +467,9 @@ impl HomeNode {
             },
             prefill_output: prefill_stage.output.clone(),
         };
+
+        // Register KV location from prefill handoff
+        self.register_kv_from_handoff(&prefill_receipt.kv_handoff, &prefill_stage.node_id);
 
         // Verify handoff before decode
         prefill_receipt.kv_handoff.verify("prefill")?;
@@ -466,6 +496,7 @@ impl HomeNode {
                 pool,
                 decode_nonce_seed,
                 timeout_ms,
+                Some(&prefill_receipt.kv_handoff.metadata.handoff_id),
             )
             .await?;
 
@@ -531,6 +562,7 @@ impl HomeNode {
         pool: &DiscoveryPool,
         nonce_seed: u64,
         timeout_ms: u64,
+        handoff_id: Option<&str>,
     ) -> Result<RemoteStageReceipt, String> {
         let stage = ExecutionStage::for_atom_kind(&atom.kind);
         let prefer_kv = matches!(atom.kind, AtomKind::Decode);
@@ -548,6 +580,7 @@ impl HomeNode {
                 next_seed,
                 timeout_ms,
                 prefer_kv,
+                handoff_id,
             )
             .await
             {
@@ -944,6 +977,8 @@ pub struct KVLocation {
     pub node_id: String,
     /// Retrieval hint for remote access.
     pub retrieval_hint: Option<String>,
+    /// Chunk summary for selection hints.
+    pub chunk_summary: (usize, usize), // (count, bytes)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -951,6 +986,21 @@ pub enum KVStorageScope {
     HomeLocal,
     RemoteAvailable,
     Migrated,
+}
+
+/// KV availability descriptor for runtime selection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KVAvailability {
+    /// Associated handoff ID for tracking.
+    pub handoff_id: String,
+    /// Node that advertises this KV availability.
+    pub node_id: String,
+    /// Location kind.
+    pub scope: KVStorageScope,
+    /// Chunk summary: (count, total_bytes).
+    pub chunk_summary: (usize, usize),
+    /// Ownership reference for provenance.
+    pub owner_hint: Option<String>,
 }
 
 /// Minimal stage execution receipt for verification.
@@ -1047,6 +1097,7 @@ fn remote_offer(
         expires_in_ms,
         endpoint: Some(endpoint.to_string()),
         kv_available: false,
+        kv_availability: Vec::new(),
         capabilities: Vec::new(),
     }
 }

@@ -1,5 +1,6 @@
 use ulp_atom_kernel::atom::{AtomKind, Region};
 use ulp_atom_kernel::runtime::{DiscoveryPool, SlotOffer};
+use ulp_atom_kernel::sovereignty::{KVAvailability, KVStorageScope};
 
 #[test]
 fn candidates_with_hints_prioritizes_kv_available_for_decode() {
@@ -13,6 +14,7 @@ fn candidates_with_hints_prioritizes_kv_available_for_decode() {
         expires_in_ms: 5000,
         endpoint: Some("http://no-kv:3000/execute".into()),
         kv_available: false,
+        kv_availability: vec![],
         capabilities: vec![],
     });
 
@@ -24,10 +26,11 @@ fn candidates_with_hints_prioritizes_kv_available_for_decode() {
         expires_in_ms: 5000,
         endpoint: Some("http://with-kv:3000/execute".into()),
         kv_available: true,
+        kv_availability: vec![],
         capabilities: vec![],
     });
 
-    let candidates = pool.candidates_with_hints(&AtomKind::Decode, None, true);
+    let candidates = pool.candidates_with_hints(&AtomKind::Decode, None, true, None);
     assert_eq!(candidates.len(), 2);
     assert_eq!(candidates[0].node_id, "node-with-kv");
     assert_eq!(candidates[1].node_id, "node-no-kv");
@@ -45,6 +48,7 @@ fn candidates_with_hints_without_preference_maintains_order() {
         expires_in_ms: 5000,
         endpoint: Some("http://a:3000/execute".into()),
         kv_available: false,
+        kv_availability: vec![],
         capabilities: vec![],
     });
 
@@ -56,10 +60,11 @@ fn candidates_with_hints_without_preference_maintains_order() {
         expires_in_ms: 5000,
         endpoint: Some("http://b:3000/execute".into()),
         kv_available: true,
+        kv_availability: vec![],
         capabilities: vec![],
     });
 
-    let candidates = pool.candidates_with_hints(&AtomKind::Prefill, None, false);
+    let candidates = pool.candidates_with_hints(&AtomKind::Prefill, None, false, None);
     assert_eq!(candidates.len(), 2);
 }
 
@@ -75,6 +80,7 @@ fn candidates_with_hints_filters_by_kind() {
         expires_in_ms: 5000,
         endpoint: Some("http://prefill:3000/execute".into()),
         kv_available: false,
+        kv_availability: vec![],
         capabilities: vec![],
     });
 
@@ -86,14 +92,55 @@ fn candidates_with_hints_filters_by_kind() {
         expires_in_ms: 5000,
         endpoint: Some("http://decode:3000/execute".into()),
         kv_available: true,
+        kv_availability: vec![],
         capabilities: vec![],
     });
 
-    let prefill_candidates = pool.candidates_with_hints(&AtomKind::Prefill, None, false);
+    let prefill_candidates = pool.candidates_with_hints(&AtomKind::Prefill, None, false, None);
     assert_eq!(prefill_candidates.len(), 1);
     assert_eq!(prefill_candidates[0].node_id, "prefill-node");
 
-    let decode_candidates = pool.candidates_with_hints(&AtomKind::Decode, None, true);
+    let decode_candidates = pool.candidates_with_hints(&AtomKind::Decode, None, true, None);
     assert_eq!(decode_candidates.len(), 1);
     assert_eq!(decode_candidates[0].node_id, "decode-node");
+}
+
+#[test]
+fn candidates_with_hints_prioritizes_matching_handoff_id() {
+    let mut pool = DiscoveryPool::new();
+
+    pool.register(SlotOffer {
+        node_id: "node-generic-kv".into(),
+        region: Region("us-west".into()),
+        supported_kinds: vec![AtomKind::Decode],
+        capacity_hint: 4,
+        expires_in_ms: 5000,
+        endpoint: Some("http://generic:3000/execute".into()),
+        kv_available: true,
+        kv_availability: vec![],
+        capabilities: vec![],
+    });
+
+    pool.register(SlotOffer {
+        node_id: "node-matching-handoff".into(),
+        region: Region("us-west".into()),
+        supported_kinds: vec![AtomKind::Decode],
+        capacity_hint: 4,
+        expires_in_ms: 5000,
+        endpoint: Some("http://matching:3000/execute".into()),
+        kv_available: false,
+        kv_availability: vec![KVAvailability {
+            handoff_id: "test-handoff-123".into(),
+            node_id: "node-matching-handoff".into(),
+            scope: KVStorageScope::RemoteAvailable,
+            chunk_summary: (2, 1024),
+            owner_hint: Some("home-node".into()),
+        }],
+        capabilities: vec![],
+    });
+
+    let candidates = pool.candidates_with_hints(&AtomKind::Decode, None, true, Some("test-handoff-123"));
+    assert_eq!(candidates.len(), 2);
+    assert_eq!(candidates[0].node_id, "node-matching-handoff");
+    assert_eq!(candidates[1].node_id, "node-generic-kv");
 }

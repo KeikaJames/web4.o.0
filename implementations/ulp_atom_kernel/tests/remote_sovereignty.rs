@@ -131,6 +131,7 @@ fn offer(node_id: &str, endpoint: &str, supported_kinds: Vec<AtomKind>) -> SlotO
         expires_in_ms: 30_000,
         endpoint: Some(endpoint.into()),
         kv_available: false,
+        kv_availability: vec![],
         capabilities: vec![],
     }
 }
