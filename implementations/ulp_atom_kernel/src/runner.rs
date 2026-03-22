@@ -22,6 +22,8 @@ impl ComputeKernel for LocalKernel {
             output,
             tokens_produced: 1,
             kv_state: request.kv_state,
+            adapter_id: None,
+            adapter_generation: None,
         })
     }
 

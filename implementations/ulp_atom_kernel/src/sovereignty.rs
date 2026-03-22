@@ -178,6 +178,7 @@ impl HomeNode {
         input: Vec<u8>,
         prefill_candidates: &[NodeProfile],
         decode_candidates: &[NodeProfile],
+        adapter_context: Option<&crate::adapter::AdapterContext>,
     ) -> Result<TwoStageOutsourcedResponse, String> {
         // --- Stage 1: Prefill ---
 
@@ -210,6 +211,13 @@ impl HomeNode {
             }
         }
 
+        let (adapter_id, adapter_generation) = adapter_context
+            .map(|ctx| {
+                let adapter = ctx.resolve_adapter();
+                (Some(adapter.adapter_id.clone()), Some(adapter.generation))
+            })
+            .unwrap_or((None, None));
+
         let prefill_receipt = PrefillReceipt {
             atom_id: prefill_atom.id.clone(),
             prefill_node_id: prefill_request.target_node_id.clone(),
@@ -225,16 +233,20 @@ impl HomeNode {
                     prefill_eph_result.kv_produced.iter().map(|c| c.byte_size).sum(),
                 ),
                 handoff_id: Some(format!("{}:prefill", prefill_atom.id)),
+                adapter_id: adapter_id.clone(),
+                adapter_generation,
             },
             kv_handoff: KVHandoff {
                 source_stage: "prefill".to_string(),
                 chunks: prefill_eph_result.kv_produced.clone(),
-                metadata: KVHandoffMetadata::from_chunks_with_provenance(
-                    format!("{}:prefill", prefill_atom.id),
-                    &prefill_eph_result.kv_produced,
-                    self.node_id.clone(),
-                    None,
-                ),
+                metadata: KVHandoffMetadata {
+                    handoff_id: format!("{}:prefill", prefill_atom.id),
+                    chunk_count: prefill_eph_result.kv_produced.len(),
+                    total_bytes: prefill_eph_result.kv_produced.iter().map(|c| c.byte_size).sum(),
+                    ownership_hint: Some(self.node_id.clone()),
+                    migration_hint: None,
+                    adapter_generation,
+                },
             },
             prefill_output: prefill_real_output.clone(),
         };
@@ -670,6 +682,8 @@ impl HomeNode {
                                 kv_produced.iter().map(|c| c.byte_size).sum(),
                             ),
                             handoff_id: handoff_id.map(|s| s.to_string()),
+                            adapter_id: None,
+                            adapter_generation: None,
                         },
                     });
                 }
@@ -1037,6 +1051,11 @@ pub struct StageReceipt {
     /// Associated handoff ID for KV location tracking.
     #[serde(default)]
     pub handoff_id: Option<String>,
+    /// Adapter lineage.
+    #[serde(default)]
+    pub adapter_id: Option<String>,
+    #[serde(default)]
+    pub adapter_generation: Option<u64>,
 }
 
 impl StageReceipt {
@@ -1074,6 +1093,14 @@ impl StageReceipt {
             return Err(format!(
                 "KV summary mismatch: receipt {:?} != handoff ({}, {})",
                 self.kv_summary, handoff.metadata.chunk_count, handoff.metadata.total_bytes
+            ));
+        }
+
+        // Verify adapter lineage consistency
+        if self.adapter_generation != handoff.metadata.adapter_generation {
+            return Err(format!(
+                "adapter generation mismatch: receipt {:?} != handoff {:?}",
+                self.adapter_generation, handoff.metadata.adapter_generation
             ));
         }
 

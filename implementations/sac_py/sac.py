@@ -527,3 +527,15 @@ class SACContainer:
         if not hasattr(self, '_chronara_governor'):
             self.init_chronara()
         return self._chronara_governor.promote_candidate(candidate)
+
+    def create_shadow_eval_request(self, candidate, input_data: bytes):
+        """Create shadow eval request for candidate validation."""
+        if not hasattr(self, '_chronara_governor'):
+            self.init_chronara()
+        return self._chronara_governor.create_shadow_request(candidate, input_data)
+
+    def validate_from_atom_result(self, candidate, atom_result: dict):
+        """Validate candidate using atom execution result."""
+        if not hasattr(self, '_chronara_governor'):
+            self.init_chronara()
+        return self._chronara_governor.validate_from_lineage(candidate, atom_result)

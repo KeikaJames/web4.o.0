@@ -18,6 +18,10 @@ pub struct ExecResponse {
     pub tokens_produced: u32,
     #[serde(default)]
     pub kv_state: Vec<KVChunk>,
+    #[serde(default)]
+    pub adapter_id: Option<String>,
+    #[serde(default)]
+    pub adapter_generation: Option<u64>,
 }
 
 /// The kernel's execution-facing boundary.

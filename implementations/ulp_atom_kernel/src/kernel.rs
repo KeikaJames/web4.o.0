@@ -120,6 +120,8 @@ pub fn dispatch(
         output: backend_resp.output,
         tokens_produced: backend_resp.tokens_produced,
         kv_state: backend_resp.kv_state,
+        adapter_id: request.adapter_context.as_ref().map(|ctx| ctx.resolve_adapter().adapter_id.clone()),
+        adapter_generation: request.adapter_context.as_ref().map(|ctx| ctx.resolve_adapter().generation),
     };
 
     let explain = PlacementExplain::from_decision(&placement, migrations.len());

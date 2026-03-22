@@ -21,6 +21,8 @@ pub struct AdapterRef {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdapterContext {
     pub active_adapter: AdapterRef,
+    #[serde(default)]
+    pub candidate_adapter: Option<AdapterRef>,
 }
 
 impl Default for AdapterContext {
@@ -31,6 +33,21 @@ impl Default for AdapterContext {
                 generation: 1,
                 mode: AdapterMode::Serve,
             },
+            candidate_adapter: None,
+        }
+    }
+}
+
+impl AdapterContext {
+    /// Get the adapter to use for execution based on mode.
+    pub fn resolve_adapter(&self) -> &AdapterRef {
+        if let Some(candidate) = &self.candidate_adapter {
+            match candidate.mode {
+                AdapterMode::ShadowEval | AdapterMode::Validation => candidate,
+                AdapterMode::Serve => &self.active_adapter,
+            }
+        } else {
+            &self.active_adapter
         }
     }
 }
