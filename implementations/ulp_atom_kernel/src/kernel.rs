@@ -5,6 +5,7 @@ use crate::backend::{Backend, BackendKind, BackendRequest};
 use crate::exec::ExecResponse;
 use crate::kv::{KVChunk, MigrationReceipt};
 use crate::router::{self, KVContext, NodeProfile, PlacementDecision};
+use crate::shadow::ComparisonResult;
 
 /// Stable explain output for a placement decision.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,4 +137,38 @@ pub fn dispatch(
         backend_kind: Some(caps.backend_kind),
         backend_device: Some(caps.device_name),
     })
+}
+
+/// Dual-path dispatch: active + shadow execution for adapter validation.
+pub fn dispatch_shadow(
+    backend: &dyn Backend,
+    request: AtomRequest,
+) -> Result<(AtomResponse, ComparisonResult), String> {
+    let adapter_ctx = request.adapter_context.as_ref()
+        .ok_or_else(|| "shadow dispatch requires adapter_context".to_string())?;
+
+    let candidate = adapter_ctx.candidate_adapter.as_ref()
+        .ok_or_else(|| "shadow dispatch requires candidate_adapter".to_string())?;
+
+    // Active path: use active adapter
+    let mut active_req = request.clone();
+    if let Some(ctx) = &mut active_req.adapter_context {
+        ctx.candidate_adapter = None;
+    }
+    let active_resp = dispatch(backend, active_req)?;
+
+    // Shadow path: use candidate adapter
+    let mut shadow_req = request.clone();
+    if let Some(ctx) = &mut shadow_req.adapter_context {
+        ctx.active_adapter = candidate.clone();
+        ctx.candidate_adapter = None;
+    }
+    let shadow_resp = dispatch(backend, shadow_req)?;
+
+    let comparison = ComparisonResult::compare(
+        active_resp.exec_response.clone(),
+        shadow_resp.exec_response.clone(),
+    );
+
+    Ok((active_resp, comparison))
 }

@@ -539,3 +539,9 @@ class SACContainer:
         if not hasattr(self, '_chronara_governor'):
             self.init_chronara()
         return self._chronara_governor.validate_from_lineage(candidate, atom_result)
+
+    def validate_from_comparison(self, candidate, comparison_result: dict):
+        """Validate candidate using shadow comparison result."""
+        if not hasattr(self, '_chronara_governor'):
+            self.init_chronara()
+        return self._chronara_governor.validate_from_comparison(candidate, comparison_result)

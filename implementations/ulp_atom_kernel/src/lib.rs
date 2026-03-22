@@ -19,3 +19,4 @@ pub mod prib;
 pub mod runtime;
 pub mod sovereignty;
 pub mod adapter;
+pub mod shadow;

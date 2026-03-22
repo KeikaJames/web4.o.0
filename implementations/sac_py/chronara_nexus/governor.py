@@ -53,6 +53,38 @@ class Governor:
             reason=None if passed else "lineage mismatch or generation not advanced"
         )
 
+    def validate_from_comparison(self, candidate: AdapterRef, comparison_result: Dict[str, Any]) -> ValidationReport:
+        """Validate candidate using shadow comparison result."""
+        lineage_valid = comparison_result.get("lineage_valid", False)
+        output_match = comparison_result.get("output_match", False)
+        kv_count_match = comparison_result.get("kv_count_match", False)
+        is_acceptable = comparison_result.get("is_acceptable", False)
+
+        # Strict: must have valid lineage and acceptable behavior
+        passed = lineage_valid and is_acceptable
+
+        metric_summary = {
+            "lineage_valid": lineage_valid,
+            "output_match": output_match,
+            "kv_count_match": kv_count_match,
+            "is_acceptable": is_acceptable,
+        }
+
+        reason = None
+        if not passed:
+            if not lineage_valid:
+                reason = "adapter lineage invalid"
+            elif not is_acceptable:
+                reason = "shadow behavior not acceptable"
+
+        return ValidationReport(
+            adapter_id=candidate.adapter_id,
+            generation=candidate.generation,
+            passed=passed,
+            metric_summary=metric_summary,
+            reason=reason
+        )
+
     def validate_candidate(self, candidate: AdapterRef) -> ValidationReport:
         """Minimal validation logic."""
         passed = candidate.generation > self.active_adapter.generation
