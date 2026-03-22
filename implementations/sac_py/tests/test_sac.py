@@ -7,7 +7,7 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from implementations.sac_py.sac import (
+from sac_py.sac import (
     DEFAULT_ALLOWED_OPERATIONS,
     DerivedAgent,
     MemoryRoot,

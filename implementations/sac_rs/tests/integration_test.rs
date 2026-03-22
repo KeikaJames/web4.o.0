@@ -6,11 +6,13 @@ use std::path::PathBuf;
 const TEST_PASSPHRASE: &str = "correct horse battery staple";
 
 fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sac_v1")
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir.parent().unwrap().parent().unwrap().join("fixtures/sac_v1")
 }
 
 fn schemas_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schemas")
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir.parent().unwrap().parent().unwrap().join("schemas")
 }
 
 fn load_schema(name: &str) -> serde_json::Value {

@@ -3,9 +3,11 @@ use std::process::Command;
 const TEST_PASSPHRASE: &str = "correct horse battery staple";
 
 fn cargo_bin() -> Command {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let mut cmd = Command::new(env!("CARGO"));
-    cmd.args(["run", "--quiet", "--"]);
-    cmd.current_dir(env!("CARGO_MANIFEST_DIR"));
+    cmd.args(["run", "--quiet", "--manifest-path"])
+        .arg(format!("{}/Cargo.toml", manifest_dir))
+        .arg("--");
     cmd.env("SAC_PASSPHRASE", TEST_PASSPHRASE);
     cmd
 }
