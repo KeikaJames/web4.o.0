@@ -44,6 +44,9 @@ fn local_candidates(sac_req: &SACRequest) -> Vec<NodeProfile> {
         prefill_affinity: 0.5,
         decode_affinity: 0.5,
         capacity: Default::default(),
+        base_model_id: None,
+        compute_flops: 1e12,
+        kv_capacity_bytes: 1_000_000_000,
     }]
 }
 

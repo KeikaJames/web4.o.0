@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::atom::{AtomKind, ComputeAtom, Region};
 use crate::capacity::NodeCapacity;
 use crate::kv::{self, KVChunk};
+use crate::link::{Link, Direction, should_transfer};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeProfile {
@@ -18,6 +19,20 @@ pub struct NodeProfile {
     pub decode_affinity: f64,
     #[serde(default)]
     pub capacity: NodeCapacity,
+    #[serde(default)]
+    pub base_model_id: Option<String>,
+    #[serde(default = "default_compute_flops")]
+    pub compute_flops: f64,
+    #[serde(default = "default_kv_capacity")]
+    pub kv_capacity_bytes: usize,
+}
+
+fn default_compute_flops() -> f64 {
+    1e12
+}
+
+fn default_kv_capacity() -> usize {
+    1_000_000_000
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +88,19 @@ fn weights_for(atom: &ComputeAtom) -> Weights {
 
 fn score_node(atom: &ComputeAtom, node: &NodeProfile, kv_ctx: Option<&KVContext>) -> PlacementBreakdown {
     let w = weights_for(atom);
+
+    // Model mismatch filter
+    if let Some(ref model_id) = node.base_model_id {
+        if model_id != &atom.model_id {
+            return PlacementBreakdown {
+                node_id: node.node_id.clone(), final_score: 0.0, latency_score: 0.0,
+                hotness_score: 0.0, engine_score: 0.0, specialization_score: 0.0,
+                kv_locality_score: 0.0, sovereignty_score: 0.0, migration_cost: 0.0,
+                capacity_score: 0.0,
+            };
+        }
+    }
+
     let latency_score = 1.0 / (1.0 + node.latency_ms / 100.0);
     let hotness_score = node.hotness;
     let engine_score = if node.supported_kinds.contains(&atom.kind) { 1.0 } else { 0.0 };
@@ -83,12 +111,28 @@ fn score_node(atom: &ComputeAtom, node: &NodeProfile, kv_ctx: Option<&KVContext>
         _ => (node.prefill_affinity + node.decode_affinity) / 2.0,
     };
 
-    let kv_locality_score = match kv_ctx {
+    // KV availability cost
+    let (kv_locality_score, kv_cost) = match kv_ctx {
         Some(ctx) if !ctx.active_chunks.is_empty() => {
+            let total_kv_bytes: usize = ctx.active_chunks.iter().map(|c| c.byte_size).sum();
+            let link = if node.region.0.starts_with("dc-") { Link::datacenter() } else { Link::p2p() };
+
             let local = ctx.active_chunks.iter().filter(|c| c.source_region == node.region).count();
-            local as f64 / ctx.active_chunks.len() as f64
+            let locality = local as f64 / ctx.active_chunks.len() as f64;
+
+            let transfer_decision = should_transfer(
+                total_kv_bytes, &link, Direction::Download, node.compute_flops, false
+            );
+
+            let cost = if transfer_decision {
+                link.transfer_cost(total_kv_bytes, Direction::Download)
+            } else {
+                crate::link::recompute_cost_kv(total_kv_bytes, node.compute_flops)
+            };
+
+            (locality, cost)
         }
-        _ => 0.5,
+        _ => (0.5, 0.0),
     };
 
     let sovereignty_score = if node.sovereignty_zone == atom.region.0 { 1.0 } else { 0.3 };
@@ -97,18 +141,26 @@ fn score_node(atom: &ComputeAtom, node: &NodeProfile, kv_ctx: Option<&KVContext>
     let is_decode = atom.kind.is_decode_phase();
     let (capacity_score, _vram, _load) = crate::capacity::score_capacity(&node.capacity, is_prefill, is_decode);
 
+    // Load penalty
+    let load_penalty = if node.capacity.current_load > 0.0 {
+        node.capacity.current_load / 100.0
+    } else {
+        0.0
+    };
+
     let score = w.latency * latency_score
         + w.hotness * hotness_score
         + w.engine * engine_score
         + w.specialization * specialization_score
         + w.kv_locality * kv_locality_score
         + w.sovereignty * sovereignty_score
-        + w.capacity * capacity_score;
+        + w.capacity * capacity_score
+        - load_penalty * 0.1;
 
     PlacementBreakdown {
         node_id: node.node_id.clone(), final_score: score, latency_score, hotness_score,
         engine_score, specialization_score, kv_locality_score, sovereignty_score,
-        migration_cost: 0.0, capacity_score,
+        migration_cost: kv_cost, capacity_score,
     }
 }
 

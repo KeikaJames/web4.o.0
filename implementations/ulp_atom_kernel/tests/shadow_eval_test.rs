@@ -45,6 +45,9 @@ fn test_dispatch_shadow_dual_path() {
             prefill_affinity: 1.0,
             decode_affinity: 0.5,
             capacity: NodeCapacity::default(),
+            base_model_id: None,
+            compute_flops: 1e12,
+            kv_capacity_bytes: 1_000_000_000,
         }],
         adapter_context: Some(adapter_ctx),
     };
