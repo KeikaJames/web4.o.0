@@ -214,6 +214,7 @@ impl HomeNode {
             stage_receipt: StageReceipt {
                 stage_id: format!("{}:prefill", prefill_atom.id),
                 stage_kind: "prefill".to_string(),
+                owner_node_id: self.node_id.clone(),
                 nonce: Nonce::new(0),
                 output_size: prefill_real_output.len(),
                 kv_summary: (
@@ -224,9 +225,11 @@ impl HomeNode {
             kv_handoff: KVHandoff {
                 source_stage: "prefill".to_string(),
                 chunks: prefill_eph_result.kv_produced.clone(),
-                metadata: KVHandoffMetadata::from_chunks(
+                metadata: KVHandoffMetadata::from_chunks_with_provenance(
                     format!("{}:prefill", prefill_atom.id),
                     &prefill_eph_result.kv_produced,
+                    self.node_id.clone(),
+                    None,
                 ),
             },
             prefill_output: prefill_real_output.clone(),
@@ -403,9 +406,11 @@ impl HomeNode {
             kv_handoff: KVHandoff {
                 source_stage: "prefill".to_string(),
                 chunks: prefill_stage.kv_produced.clone(),
-                metadata: KVHandoffMetadata::from_chunks(
+                metadata: KVHandoffMetadata::from_chunks_with_provenance(
                     format!("{}:prefill", prefill_atom.id),
                     &prefill_stage.kv_produced,
+                    self.node_id.clone(),
+                    Some(prefill_stage.node_id.clone()),
                 ),
             },
             prefill_output: prefill_stage.output.clone(),
@@ -580,6 +585,7 @@ impl HomeNode {
                         stage_receipt: StageReceipt {
                             stage_id: format!("{}:{}", atom.id, stage_kind),
                             stage_kind: stage_kind.to_string(),
+                            owner_node_id: self.node_id.clone(),
                             nonce: response.nonce.clone(),
                             output_size: output.len(),
                             kv_summary: (
@@ -811,6 +817,20 @@ impl KVHandoff {
         }
         Ok(())
     }
+
+    /// Verify handoff with ownership provenance.
+    pub fn verify_with_owner(&self, expected_source: &str, expected_owner: &str) -> Result<(), String> {
+        self.verify(expected_source)?;
+        if let Some(ref owner) = self.metadata.ownership_hint {
+            if owner != expected_owner {
+                return Err(format!(
+                    "handoff ownership mismatch: expected '{}', got '{}'",
+                    expected_owner, owner
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Minimal metadata for KV handoff, with basic verification fields.
@@ -843,6 +863,25 @@ impl KVHandoffMetadata {
             migration_hint: None,
         }
     }
+
+    /// Generate metadata with ownership and migration info.
+    pub fn from_chunks_with_provenance(
+        handoff_id: String,
+        chunks: &[KVChunk],
+        owner_node_id: String,
+        source_node_id: Option<String>,
+    ) -> Self {
+        let chunk_count = chunks.len();
+        let total_bytes = chunks.iter().map(|c| c.byte_size).sum();
+        let migration_hint = source_node_id.map(|src| format!("from:{}", src));
+        Self {
+            handoff_id,
+            chunk_count,
+            total_bytes,
+            ownership_hint: Some(owner_node_id),
+            migration_hint,
+        }
+    }
 }
 
 impl Default for KVHandoffMetadata {
@@ -864,6 +903,8 @@ pub struct StageReceipt {
     pub stage_id: String,
     /// Stage kind (prefill/decode).
     pub stage_kind: String,
+    /// Owner node that holds authority over this stage execution.
+    pub owner_node_id: String,
     /// Nonce from slot claim.
     pub nonce: Nonce,
     /// Output size in bytes.
