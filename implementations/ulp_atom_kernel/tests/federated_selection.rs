@@ -16,6 +16,8 @@ fn candidates_with_hints_prioritizes_kv_available_for_decode() {
         kv_available: false,
         kv_availability: vec![],
         capabilities: vec![],
+        ownership_context: None,
+        latency_hint_ms: None,
     });
 
     pool.register(SlotOffer {
@@ -28,6 +30,8 @@ fn candidates_with_hints_prioritizes_kv_available_for_decode() {
         kv_available: true,
         kv_availability: vec![],
         capabilities: vec![],
+        ownership_context: None,
+        latency_hint_ms: None,
     });
 
     let candidates = pool.candidates_with_hints(&AtomKind::Decode, None, true, None);
@@ -50,6 +54,8 @@ fn candidates_with_hints_without_preference_maintains_order() {
         kv_available: false,
         kv_availability: vec![],
         capabilities: vec![],
+        ownership_context: None,
+        latency_hint_ms: None,
     });
 
     pool.register(SlotOffer {
@@ -62,6 +68,8 @@ fn candidates_with_hints_without_preference_maintains_order() {
         kv_available: true,
         kv_availability: vec![],
         capabilities: vec![],
+        ownership_context: None,
+        latency_hint_ms: None,
     });
 
     let candidates = pool.candidates_with_hints(&AtomKind::Prefill, None, false, None);
@@ -82,6 +90,8 @@ fn candidates_with_hints_filters_by_kind() {
         kv_available: false,
         kv_availability: vec![],
         capabilities: vec![],
+        ownership_context: None,
+        latency_hint_ms: None,
     });
 
     pool.register(SlotOffer {
@@ -94,6 +104,8 @@ fn candidates_with_hints_filters_by_kind() {
         kv_available: true,
         kv_availability: vec![],
         capabilities: vec![],
+        ownership_context: None,
+        latency_hint_ms: None,
     });
 
     let prefill_candidates = pool.candidates_with_hints(&AtomKind::Prefill, None, false, None);
@@ -119,6 +131,8 @@ fn candidates_with_hints_prioritizes_matching_handoff_id() {
         kv_available: true,
         kv_availability: vec![],
         capabilities: vec![],
+        ownership_context: None,
+        latency_hint_ms: None,
     });
 
     pool.register(SlotOffer {
@@ -137,10 +151,62 @@ fn candidates_with_hints_prioritizes_matching_handoff_id() {
             owner_hint: Some("home-node".into()),
         }],
         capabilities: vec![],
+        ownership_context: None,
+        latency_hint_ms: None,
     });
 
     let candidates = pool.candidates_with_hints(&AtomKind::Decode, None, true, Some("test-handoff-123"));
     assert_eq!(candidates.len(), 2);
     assert_eq!(candidates[0].node_id, "node-matching-handoff");
     assert_eq!(candidates[1].node_id, "node-generic-kv");
+}
+
+#[test]
+fn candidates_with_hints_considers_latency_and_ownership() {
+    let mut pool = DiscoveryPool::new();
+
+    pool.register(SlotOffer {
+        node_id: "node-high-latency".into(),
+        region: Region("us-west".into()),
+        supported_kinds: vec![AtomKind::Decode],
+        capacity_hint: 4,
+        expires_in_ms: 5000,
+        endpoint: Some("http://high-latency:3000/execute".into()),
+        kv_available: false,
+        kv_availability: vec![KVAvailability {
+            handoff_id: "handoff-x".into(),
+            node_id: "node-high-latency".into(),
+            scope: KVStorageScope::RemoteAvailable,
+            chunk_summary: (1, 512),
+            owner_hint: None,
+        }],
+        capabilities: vec![],
+        ownership_context: None,
+        latency_hint_ms: Some(500),
+    });
+
+    pool.register(SlotOffer {
+        node_id: "node-low-latency-owner".into(),
+        region: Region("us-west".into()),
+        supported_kinds: vec![AtomKind::Decode],
+        capacity_hint: 4,
+        expires_in_ms: 5000,
+        endpoint: Some("http://low-latency:3000/execute".into()),
+        kv_available: false,
+        kv_availability: vec![KVAvailability {
+            handoff_id: "handoff-x".into(),
+            node_id: "node-low-latency-owner".into(),
+            scope: KVStorageScope::RemoteAvailable,
+            chunk_summary: (1, 512),
+            owner_hint: Some("home-1".into()),
+        }],
+        capabilities: vec![],
+        ownership_context: Some("home-1".into()),
+        latency_hint_ms: Some(100),
+    });
+
+    let candidates = pool.candidates_with_hints(&AtomKind::Decode, None, true, Some("handoff-x"));
+    assert_eq!(candidates.len(), 2);
+    assert_eq!(candidates[0].node_id, "node-low-latency-owner");
+    assert_eq!(candidates[1].node_id, "node-high-latency");
 }

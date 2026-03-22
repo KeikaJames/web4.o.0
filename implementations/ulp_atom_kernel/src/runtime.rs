@@ -98,6 +98,12 @@ pub struct SlotOffer {
     /// Minimal capabilities descriptor.
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// Ownership/migration relevance hint for federated coordination.
+    #[serde(default)]
+    pub ownership_context: Option<String>,
+    /// Latency hint in milliseconds for selection priority.
+    #[serde(default)]
+    pub latency_hint_ms: Option<u64>,
 }
 
 /// Home node claiming a slot on a specific ephemeral node.
@@ -204,6 +210,7 @@ impl DiscoveryPool {
     /// Return candidates with federated hints considered.
     /// Prioritizes candidates with kv_available for Decode, filters by capabilities.
     /// If handoff_id is provided, prioritizes nodes with matching KV availability.
+    /// Also considers ownership_context and latency_hint for better selection.
     pub fn candidates_with_hints(
         &self,
         kind: &AtomKind,
@@ -221,20 +228,34 @@ impl DiscoveryPool {
 
         if prefer_kv {
             if let Some(hid) = handoff_id {
-                // Prioritize nodes with matching handoff_id in kv_availability
+                // Prioritize: matching handoff > ownership context > kv_available > latency
                 candidates.sort_by_key(|o| {
                     let has_handoff = o.kv_availability.iter().any(|kv| kv.handoff_id == hid);
-                    if has_handoff {
-                        0
+                    let has_ownership = o.kv_availability.iter().any(|kv| {
+                        kv.handoff_id == hid && kv.owner_hint.is_some()
+                    });
+                    let latency = o.latency_hint_ms.unwrap_or(1000);
+
+                    if has_handoff && has_ownership {
+                        (0, latency)
+                    } else if has_handoff {
+                        (1, latency)
                     } else if o.kv_available {
-                        1
+                        (2, latency)
                     } else {
-                        2
+                        (3, latency)
                     }
                 });
             } else {
-                // Fallback to legacy bool
-                candidates.sort_by_key(|o| if o.kv_available { 0 } else { 1 });
+                // Fallback: kv_available > latency
+                candidates.sort_by_key(|o| {
+                    let latency = o.latency_hint_ms.unwrap_or(1000);
+                    if o.kv_available {
+                        (0, latency)
+                    } else {
+                        (1, latency)
+                    }
+                });
             }
         }
 

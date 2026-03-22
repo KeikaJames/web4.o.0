@@ -1132,5 +1132,7 @@ fn remote_offer(
         kv_available: false,
         kv_availability: Vec::new(),
         capabilities: Vec::new(),
+        ownership_context: None,
+        latency_hint_ms: None,
     }
 }
