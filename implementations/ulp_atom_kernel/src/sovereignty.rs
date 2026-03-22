@@ -211,6 +211,16 @@ impl HomeNode {
             atom_id: prefill_atom.id.clone(),
             prefill_node_id: prefill_request.target_node_id.clone(),
             tokens_produced: prefill_eph_result.tokens_produced,
+            stage_receipt: StageReceipt {
+                stage_id: format!("{}:prefill", prefill_atom.id),
+                stage_kind: "prefill".to_string(),
+                nonce: Nonce::new(0),
+                output_size: prefill_real_output.len(),
+                kv_summary: (
+                    prefill_eph_result.kv_produced.len(),
+                    prefill_eph_result.kv_produced.iter().map(|c| c.byte_size).sum(),
+                ),
+            },
             kv_handoff: KVHandoff {
                 source_stage: "prefill".to_string(),
                 chunks: prefill_eph_result.kv_produced.clone(),
@@ -226,6 +236,9 @@ impl HomeNode {
 
         // Verify handoff before decode
         prefill_receipt.kv_handoff.verify("prefill")?;
+
+        // Verify stage receipt
+        prefill_receipt.stage_receipt.verify("prefill", &Nonce::new(0))?;
 
         // Decode input is the real prefill output
         let (decode_request, mut decode_blinded) =
@@ -386,6 +399,7 @@ impl HomeNode {
             atom_id: prefill_atom.id.clone(),
             prefill_node_id: prefill_stage.node_id.clone(),
             tokens_produced: prefill_stage.tokens_produced,
+            stage_receipt: prefill_stage.stage_receipt.clone(),
             kv_handoff: KVHandoff {
                 source_stage: "prefill".to_string(),
                 chunks: prefill_stage.kv_produced.clone(),
@@ -399,6 +413,9 @@ impl HomeNode {
 
         // Verify handoff before decode
         prefill_receipt.kv_handoff.verify("prefill")?;
+
+        // Verify stage receipt
+        prefill_receipt.stage_receipt.verify("prefill", &prefill_receipt.stage_receipt.nonce)?;
 
         let decode_stage = self
             .execute_remote_stage(
@@ -548,11 +565,28 @@ impl HomeNode {
                     let output = crate::prib::unblind(&response.output, &mask);
                     let kv_produced = response.kv_produced;
                     self.absorb_kv(&kv_produced);
+
+                    let stage_kind = match stage {
+                        ExecutionStage::Prefill => "prefill",
+                        ExecutionStage::Decode => "decode",
+                        ExecutionStage::General => "general",
+                    };
+
                     return Ok(RemoteStageReceipt {
                         node_id: response.ephemeral_node_id,
-                        output,
+                        output: output.clone(),
                         tokens_produced: response.tokens_produced,
-                        kv_produced,
+                        kv_produced: kv_produced.clone(),
+                        stage_receipt: StageReceipt {
+                            stage_id: format!("{}:{}", atom.id, stage_kind),
+                            stage_kind: stage_kind.to_string(),
+                            nonce: response.nonce.clone(),
+                            output_size: output.len(),
+                            kv_summary: (
+                                kv_produced.len(),
+                                kv_produced.iter().map(|c| c.byte_size).sum(),
+                            ),
+                        },
                     });
                 }
                 Err(e) => {
@@ -823,6 +857,40 @@ impl Default for KVHandoffMetadata {
     }
 }
 
+/// Minimal stage execution receipt for verification.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StageReceipt {
+    /// Unique stage execution identifier.
+    pub stage_id: String,
+    /// Stage kind (prefill/decode).
+    pub stage_kind: String,
+    /// Nonce from slot claim.
+    pub nonce: Nonce,
+    /// Output size in bytes.
+    pub output_size: usize,
+    /// KV summary: chunk count and total bytes.
+    pub kv_summary: (usize, usize),
+}
+
+impl StageReceipt {
+    /// Verify receipt consistency.
+    pub fn verify(&self, expected_kind: &str, expected_nonce: &Nonce) -> Result<(), String> {
+        if self.stage_kind != expected_kind {
+            return Err(format!(
+                "stage kind mismatch: expected '{}', got '{}'",
+                expected_kind, self.stage_kind
+            ));
+        }
+        if !self.nonce.matches(expected_nonce) {
+            return Err(format!(
+                "nonce mismatch: expected {}, got {}",
+                expected_nonce.0, self.nonce.0
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Intermediate state produced after Prefill and passed into Decode.
 /// Held exclusively on the Home Node between stages.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -830,6 +898,8 @@ pub struct PrefillReceipt {
     pub atom_id: String,
     pub prefill_node_id: String,
     pub tokens_produced: u32,
+    /// Stage execution receipt for verification.
+    pub stage_receipt: StageReceipt,
     /// KV handoff: explicit KV-centric transfer to Decode stage.
     pub kv_handoff: KVHandoff,
     /// Unblinded prefill output, stored on Home Node only.
@@ -860,6 +930,7 @@ struct RemoteStageReceipt {
     output: Vec<u8>,
     tokens_produced: u32,
     kv_produced: Vec<KVChunk>,
+    stage_receipt: StageReceipt,
 }
 
 fn remote_offer(
