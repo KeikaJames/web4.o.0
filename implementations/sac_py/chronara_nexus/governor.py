@@ -103,13 +103,15 @@ class Governor:
     def validate_candidate(self, candidate: AdapterRef) -> ValidationReport:
         """Minimal validation logic."""
         passed = candidate.generation > self.active_adapter.generation
-        return ValidationReport(
+        report = ValidationReport(
             adapter_id=candidate.adapter_id,
             generation=candidate.generation,
             passed=passed,
             metric_summary={"placeholder": True},
             reason=None if passed else "generation not advanced"
         )
+        self.last_validation_report = report
+        return report
 
     def promote_candidate(self, candidate: AdapterRef) -> bool:
         """Promote candidate to active."""
@@ -132,3 +134,15 @@ class Governor:
     def mark_stable(self):
         """Mark current active as stable."""
         self.stable_adapter = self.active_adapter
+
+    def decide(self, candidate: AdapterRef, validation_report: ValidationReport) -> str:
+        """Decide whether to promote or reject candidate."""
+        if validation_report.passed:
+            return "promote"
+        else:
+            return "reject"
+
+    def compute_drift_score(self, metric_summary: dict) -> float:
+        """Compute drift score for future gamma adjustment."""
+        # Placeholder for future dynamic learning rate scheduling
+        return 0.0

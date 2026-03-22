@@ -1,22 +1,8 @@
 """Collector: Admission gate and memory routing."""
 
-from enum import Enum
 from typing import Optional
 from .types import AdapterRef
-
-
-class MemoryLayer(Enum):
-    """Three-layer memory separation."""
-    EXPLICIT = "explicit"
-    STRATEGY = "strategy"
-    PARAMETER = "parameter"
-
-
-class ObservationType(Enum):
-    """Observation classification."""
-    TYPE_1_EXPLICIT = "type_1_explicit"
-    TYPE_2_STRATEGY = "type_2_strategy"
-    TYPE_3_PARAMETER = "type_3_parameter"
+from .admission_gate import AdmissionGate, ObservationType
 
 
 class Collector:
@@ -24,22 +10,23 @@ class Collector:
 
     def __init__(self, active_adapter: AdapterRef):
         self.active_adapter = active_adapter
-        self.observation_queue = []
+        self.admission_gate = AdmissionGate()
+        self.explicit_trace = []
+        self.strategy_trace = []
+        self.parameter_queue = []
 
     def admit_observation(self, observation: dict) -> ObservationType:
         """Classify observation and route to appropriate memory layer."""
-        obs_type = self._classify(observation)
-        self.observation_queue.append((obs_type, observation))
-        return obs_type
+        obs_type = self.admission_gate.classify(observation)
 
-    def _classify(self, observation: dict) -> ObservationType:
-        """Minimal classification logic."""
-        if observation.get("explicit_feedback"):
-            return ObservationType.TYPE_1_EXPLICIT
-        elif observation.get("strategy_signal"):
-            return ObservationType.TYPE_2_STRATEGY
+        if obs_type == ObservationType.EXPLICIT_ONLY:
+            self.explicit_trace.append(observation)
+        elif obs_type == ObservationType.STRATEGY_ONLY:
+            self.strategy_trace.append(observation)
         else:
-            return ObservationType.TYPE_3_PARAMETER
+            self.parameter_queue.append(observation)
+
+        return obs_type
 
     def get_active_adapter(self) -> AdapterRef:
         """Return current active adapter reference."""

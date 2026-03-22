@@ -1,5 +1,6 @@
 """Consolidator: Candidate adapter lifecycle and micro-batch evolution."""
 
+import numpy as np
 from typing import Optional
 from .types import AdapterRef, SnapshotRef
 
@@ -7,9 +8,12 @@ from .types import AdapterRef, SnapshotRef
 class Consolidator:
     """Manages candidate adapter evolution and snapshot generation."""
 
-    def __init__(self):
+    def __init__(self, lr: float = 0.01, gamma: float = 0.001):
         self.candidate_adapter: Optional[AdapterRef] = None
         self.micro_batch_buffer = []
+        self.lr = lr
+        self.gamma = gamma
+        self.phi = {}
 
     def create_candidate(self, base_adapter: AdapterRef) -> AdapterRef:
         """Create new candidate adapter from base."""
@@ -26,11 +30,26 @@ class Consolidator:
         self.micro_batch_buffer.append(observation)
 
     def evolve_micro_batch(self) -> bool:
-        """Placeholder for micro-batch parameter update."""
+        """Micro-batch parameter update with shrink formula."""
         if len(self.micro_batch_buffer) < 10:
             return False
+
+        # Placeholder gradient computation
+        g = np.random.randn(10)
+        g_clip = np.clip(g, -1.0, 1.0)
+
+        # Shrink formula: phi <- phi - lr * g_clip - gamma * phi
+        for key in self.phi:
+            self.phi[key] = self.phi[key] - self.lr * g_clip[0] - self.gamma * self.phi[key]
+
         self.micro_batch_buffer.clear()
         return True
+
+    def prune_parameters(self, phi: dict) -> dict:
+        """Prune parameters using quantile 0.1."""
+        values = np.array(list(phi.values()))
+        threshold = np.quantile(np.abs(values), 0.1)
+        return {k: v for k, v in phi.items() if np.abs(v) > threshold}
 
     def generate_snapshot(self) -> Optional[SnapshotRef]:
         """Generate snapshot of candidate adapter."""
