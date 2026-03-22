@@ -135,6 +135,7 @@ fn offer(node_id: &str, endpoint: &str, supported_kinds: Vec<AtomKind>) -> SlotO
         capabilities: vec![],
         ownership_context: None,
         latency_hint_ms: None,
+        registered_at: std::time::Instant::now(),
     }
 }
 

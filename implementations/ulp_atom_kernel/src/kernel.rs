@@ -108,7 +108,9 @@ pub fn dispatch(
     let backend_resp = match request.atom.kind {
         AtomKind::Prefill => backend.execute_prefill(backend_req)?,
         AtomKind::Decode => backend.execute_decode(backend_req)?,
-        _ => backend.execute_prefill(backend_req)?,
+        AtomKind::Inference | AtomKind::Embedding | AtomKind::FineTune => {
+            return Err(format!("AtomKind::{:?} not implemented", request.atom.kind));
+        }
     };
 
     let exec_response = ExecResponse {

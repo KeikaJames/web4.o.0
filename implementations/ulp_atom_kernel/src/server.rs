@@ -34,9 +34,8 @@ async fn handle_slot_claim(
     State(state): State<Arc<ServerState>>,
     Json(claim): Json<SlotClaim>,
 ) -> impl IntoResponse {
-    let _ = state;
     let response = SlotClaimResponse::Accepted {
-        node_id: claim.target_node_id,
+        node_id: state.node_id.clone(),
         nonce: claim.nonce,
     };
     (StatusCode::OK, Json(response)).into_response()
@@ -74,7 +73,9 @@ async fn handle_execute_blinded(
     let backend_resp = match blinded.kind {
         crate::atom::AtomKind::Prefill => state.backend.execute_prefill(backend_req),
         crate::atom::AtomKind::Decode => state.backend.execute_decode(backend_req),
-        _ => state.backend.execute_prefill(backend_req),
+        crate::atom::AtomKind::Inference | crate::atom::AtomKind::Embedding | crate::atom::AtomKind::FineTune => {
+            Err(format!("AtomKind::{:?} not implemented", blinded.kind))
+        }
     };
 
     match backend_resp {

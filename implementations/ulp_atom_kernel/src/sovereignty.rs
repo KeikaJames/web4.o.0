@@ -733,7 +733,9 @@ impl EphemeralNode {
         let backend_response = match blinded.kind {
             AtomKind::Prefill => backend.execute_prefill(backend_request),
             AtomKind::Decode => backend.execute_decode(backend_request),
-            _ => backend.execute_prefill(backend_request), // default path
+            AtomKind::Inference | AtomKind::Embedding | AtomKind::FineTune => {
+                return Err(format!("AtomKind::{:?} not implemented", blinded.kind));
+            }
         }?;
 
         Ok(EphemeralExecutionResult {
@@ -1134,5 +1136,6 @@ fn remote_offer(
         capabilities: Vec::new(),
         ownership_context: None,
         latency_hint_ms: None,
+        registered_at: std::time::Instant::now(),
     }
 }

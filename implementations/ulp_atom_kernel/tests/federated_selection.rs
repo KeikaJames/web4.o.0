@@ -18,6 +18,7 @@ fn candidates_with_hints_prioritizes_kv_available_for_decode() {
         capabilities: vec![],
         ownership_context: None,
         latency_hint_ms: None,
+        registered_at: std::time::Instant::now(),
     });
 
     pool.register(SlotOffer {
@@ -32,6 +33,7 @@ fn candidates_with_hints_prioritizes_kv_available_for_decode() {
         capabilities: vec![],
         ownership_context: None,
         latency_hint_ms: None,
+        registered_at: std::time::Instant::now(),
     });
 
     let candidates = pool.candidates_with_hints(&AtomKind::Decode, None, true, None);
@@ -56,6 +58,7 @@ fn candidates_with_hints_without_preference_maintains_order() {
         capabilities: vec![],
         ownership_context: None,
         latency_hint_ms: None,
+        registered_at: std::time::Instant::now(),
     });
 
     pool.register(SlotOffer {
@@ -70,6 +73,7 @@ fn candidates_with_hints_without_preference_maintains_order() {
         capabilities: vec![],
         ownership_context: None,
         latency_hint_ms: None,
+        registered_at: std::time::Instant::now(),
     });
 
     let candidates = pool.candidates_with_hints(&AtomKind::Prefill, None, false, None);
@@ -92,6 +96,7 @@ fn candidates_with_hints_filters_by_kind() {
         capabilities: vec![],
         ownership_context: None,
         latency_hint_ms: None,
+        registered_at: std::time::Instant::now(),
     });
 
     pool.register(SlotOffer {
@@ -106,6 +111,7 @@ fn candidates_with_hints_filters_by_kind() {
         capabilities: vec![],
         ownership_context: None,
         latency_hint_ms: None,
+        registered_at: std::time::Instant::now(),
     });
 
     let prefill_candidates = pool.candidates_with_hints(&AtomKind::Prefill, None, false, None);
@@ -133,6 +139,7 @@ fn candidates_with_hints_prioritizes_matching_handoff_id() {
         capabilities: vec![],
         ownership_context: None,
         latency_hint_ms: None,
+        registered_at: std::time::Instant::now(),
     });
 
     pool.register(SlotOffer {
@@ -153,6 +160,7 @@ fn candidates_with_hints_prioritizes_matching_handoff_id() {
         capabilities: vec![],
         ownership_context: None,
         latency_hint_ms: None,
+        registered_at: std::time::Instant::now(),
     });
 
     let candidates = pool.candidates_with_hints(&AtomKind::Decode, None, true, Some("test-handoff-123"));
@@ -183,6 +191,7 @@ fn candidates_with_hints_considers_latency_and_ownership() {
         capabilities: vec![],
         ownership_context: None,
         latency_hint_ms: Some(500),
+        registered_at: std::time::Instant::now(),
     });
 
     pool.register(SlotOffer {
@@ -203,6 +212,7 @@ fn candidates_with_hints_considers_latency_and_ownership() {
         capabilities: vec![],
         ownership_context: Some("home-1".into()),
         latency_hint_ms: Some(100),
+        registered_at: std::time::Instant::now(),
     });
 
     let candidates = pool.candidates_with_hints(&AtomKind::Decode, None, true, Some("handoff-x"));

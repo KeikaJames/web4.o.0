@@ -104,6 +104,16 @@ pub struct SlotOffer {
     /// Latency hint in milliseconds for selection priority.
     #[serde(default)]
     pub latency_hint_ms: Option<u64>,
+    /// Registration timestamp for expiry tracking.
+    #[serde(skip, default = "std::time::Instant::now")]
+    pub registered_at: std::time::Instant,
+}
+
+impl SlotOffer {
+    /// Check if this offer has expired.
+    pub fn is_expired(&self) -> bool {
+        self.registered_at.elapsed().as_millis() as u64 >= self.expires_in_ms
+    }
 }
 
 /// Home node claiming a slot on a specific ephemeral node.
@@ -129,10 +139,16 @@ pub enum SlotClaimResponse {
 }
 
 impl SlotClaimResponse {
-    /// Verify that the response nonce matches the claim nonce.
+    /// Verify that the response nonce and node_id match the claim.
     pub fn verify_nonce(&self, claim: &SlotClaim) -> Result<(), String> {
         match self {
-            SlotClaimResponse::Accepted { nonce, .. } => {
+            SlotClaimResponse::Accepted { node_id, nonce } => {
+                if node_id != &claim.target_node_id {
+                    return Err(format!(
+                        "node_id mismatch: expected '{}', got '{}'",
+                        claim.target_node_id, node_id
+                    ));
+                }
                 if nonce.matches(&claim.nonce) {
                     Ok(())
                 } else {
@@ -175,7 +191,8 @@ impl DiscoveryPool {
     }
 
     /// Register an ephemeral node's slot offer.
-    pub fn register(&mut self, offer: SlotOffer) {
+    pub fn register(&mut self, mut offer: SlotOffer) {
+        offer.registered_at = std::time::Instant::now();
         // Replace existing offer from same node
         if let Some(pos) = self.offers.iter().position(|o| o.node_id == offer.node_id) {
             self.offers[pos] = offer;
@@ -202,7 +219,7 @@ impl DiscoveryPool {
         self.offers
             .iter()
             .filter(|o| {
-                o.supported_kinds.contains(kind) && region.map_or(true, |r| o.region.0 == r.0)
+                !o.is_expired() && o.supported_kinds.contains(kind) && region.map_or(true, |r| o.region.0 == r.0)
             })
             .collect()
     }
@@ -222,7 +239,7 @@ impl DiscoveryPool {
             .offers
             .iter()
             .filter(|o| {
-                o.supported_kinds.contains(kind) && region.map_or(true, |r| o.region.0 == r.0)
+                !o.is_expired() && o.supported_kinds.contains(kind) && region.map_or(true, |r| o.region.0 == r.0)
             })
             .collect();
 
