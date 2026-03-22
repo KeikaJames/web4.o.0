@@ -3,7 +3,7 @@
 import pytest
 from implementations.sac_py.chronara_nexus import (
     AdapterRef, AdapterMode, Collector, Consolidator, Governor,
-    AdmissionGate, ObservationType, SnapshotManager
+    ObservationType, SnapshotManager
 )
 
 
@@ -13,28 +13,26 @@ def test_chronara_core_objects_initialize():
     collector = Collector(adapter)
     consolidator = Consolidator(lr=0.01, gamma=0.001)
     governor = Governor(adapter)
-    gate = AdmissionGate()
     snapshot_mgr = SnapshotManager()
 
     assert collector.active_adapter.adapter_id == "base"
     assert consolidator.lr == 0.01
     assert consolidator.gamma == 0.001
     assert governor.active_adapter.generation == 1
-    assert gate is not None
     assert snapshot_mgr is not None
 
 
-def test_observation_admission_gate_routing():
-    """Observation can be classified and routed."""
-    gate = AdmissionGate()
+def test_observation_collector_classification():
+    """Observation classification lives on Collector directly."""
+    collector = Collector(AdapterRef("base", 1, AdapterMode.SERVE))
 
     obs1 = {"explicit_feedback": True}
     obs2 = {"strategy_signal": True}
     obs3 = {"data": "parameter"}
 
-    assert gate.classify(obs1) == ObservationType.EXPLICIT_ONLY
-    assert gate.classify(obs2) == ObservationType.STRATEGY_ONLY
-    assert gate.classify(obs3) == ObservationType.PARAMETER_CANDIDATE
+    assert collector.classify(obs1) == ObservationType.EXPLICIT_ONLY
+    assert collector.classify(obs2) == ObservationType.STRATEGY_ONLY
+    assert collector.classify(obs3) == ObservationType.PARAMETER_CANDIDATE
 
 
 def test_collector_routes_to_traces():
@@ -46,9 +44,9 @@ def test_collector_routes_to_traces():
     collector.admit_observation({"strategy_signal": True})
     collector.admit_observation({"data": "param"})
 
-    assert len(collector.explicit_trace.get_all()) == 1
-    assert len(collector.strategy_trace.get_all()) == 1
-    assert len(collector.parameter_queue.get_all()) == 1
+    assert len(collector.explicit_trace) == 1
+    assert len(collector.strategy_trace) == 1
+    assert len(collector.parameter_queue) == 1
 
 
 def test_snapshot_manager_semantics():

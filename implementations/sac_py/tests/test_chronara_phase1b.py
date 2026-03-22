@@ -3,7 +3,7 @@
 import pytest
 from implementations.sac_py.chronara_nexus import (
     AdapterRef, AdapterMode, Collector, Consolidator, Governor,
-    SnapshotManager, InMemorySink
+    ObservationType, SnapshotManager
 )
 
 
@@ -121,28 +121,25 @@ def test_snapshot_manager_rollback_target_selection():
     assert mgr.get_rollback_target().generation == 2
 
 
-def test_memory_sink_interface():
-    """Collector uses memory sink interface, not raw list."""
+def test_collector_uses_plain_lists():
+    """Collector keeps plain Python lists instead of wrapper sinks."""
     adapter = AdapterRef("base", 1, AdapterMode.SERVE)
     collector = Collector(adapter)
 
-    # Verify memory sinks are InMemorySink instances
-    assert isinstance(collector.explicit_trace, InMemorySink)
-    assert isinstance(collector.strategy_trace, InMemorySink)
-    assert isinstance(collector.parameter_queue, InMemorySink)
+    assert isinstance(collector.explicit_trace, list)
+    assert isinstance(collector.strategy_trace, list)
+    assert isinstance(collector.parameter_queue, list)
 
-    # Verify interface methods work
     collector.explicit_trace.append({"test": 1})
-    assert len(collector.explicit_trace.get_all()) == 1
+    assert len(collector.explicit_trace) == 1
 
     collector.explicit_trace.clear()
-    assert len(collector.explicit_trace.get_all()) == 0
+    assert len(collector.explicit_trace) == 0
 
 
 def test_sac_chronara_real_loop():
     """SAC Chronara mount drives real minimal loop."""
     from implementations.sac_py.sac import SACContainer
-    from implementations.sac_py.chronara_nexus import ObservationType
 
     sac = SACContainer.create("/tmp/mem")
     sac.init_chronara()
@@ -176,4 +173,3 @@ def test_sac_chronara_real_loop():
     # Verify active adapter updated
     current = sac.current_adapter_ref()
     assert current.generation == 2
-

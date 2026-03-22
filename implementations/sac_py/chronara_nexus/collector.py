@@ -1,24 +1,29 @@
-"""Collector: Admission gate and memory routing."""
+"""Collector: observation classification and in-memory routing."""
 
-from typing import Optional
-from .types import AdapterRef
-from .admission_gate import AdmissionGate, ObservationType
-from .memory_sink import InMemorySink
+from .types import AdapterRef, ObservationType
 
 
 class Collector:
-    """Admission gate and memory routing for observations."""
+    """Classify observations and route them into in-memory traces."""
 
     def __init__(self, active_adapter: AdapterRef):
         self.active_adapter = active_adapter
-        self.admission_gate = AdmissionGate()
-        self.explicit_trace = InMemorySink()
-        self.strategy_trace = InMemorySink()
-        self.parameter_queue = InMemorySink()
+        self.explicit_trace = []
+        self.strategy_trace = []
+        self.parameter_queue = []
+
+    @staticmethod
+    def classify(observation: dict) -> ObservationType:
+        """Classify one observation without an extra wrapper object."""
+        if observation.get("explicit_feedback"):
+            return ObservationType.EXPLICIT_ONLY
+        if observation.get("strategy_signal"):
+            return ObservationType.STRATEGY_ONLY
+        return ObservationType.PARAMETER_CANDIDATE
 
     def admit_observation(self, observation: dict) -> ObservationType:
         """Classify observation and route to appropriate memory layer."""
-        obs_type = self.admission_gate.classify(observation)
+        obs_type = self.classify(observation)
 
         if obs_type == ObservationType.EXPLICIT_ONLY:
             self.explicit_trace.append(observation)

@@ -1,7 +1,6 @@
 """Consolidator: Candidate adapter lifecycle and micro-batch evolution."""
 
-import numpy as np
-from typing import Optional, Dict
+from typing import Dict, Optional
 from .types import AdapterRef, SnapshotRef
 
 
@@ -29,7 +28,24 @@ class Consolidator:
         """Add observation to micro-batch buffer."""
         self.micro_batch_buffer.append(observation)
 
-    def _extract_numeric_summary(self, observations: list) -> np.ndarray:
+    @staticmethod
+    def _clip(value: float, lower: float, upper: float) -> float:
+        return max(lower, min(upper, value))
+
+    @staticmethod
+    def _quantile(sorted_values: list[float], q: float) -> float:
+        if not sorted_values:
+            raise ValueError("quantile requires at least one value")
+        if len(sorted_values) == 1:
+            return sorted_values[0]
+
+        position = (len(sorted_values) - 1) * q
+        lower = int(position)
+        upper = min(lower + 1, len(sorted_values) - 1)
+        weight = position - lower
+        return sorted_values[lower] * (1.0 - weight) + sorted_values[upper] * weight
+
+    def _extract_numeric_summary(self, observations: list) -> list[float]:
         """Extract deterministic numeric summary from observations."""
         summary = []
         for obs in observations:
@@ -41,7 +57,7 @@ class Consolidator:
                 summary.append(0.5)
             else:
                 summary.append(0.0)
-        return np.array(summary[:10])
+        return summary[:10]
 
     def evolve_micro_batch(self) -> bool:
         """Micro-batch parameter update with shrink formula."""
@@ -50,8 +66,8 @@ class Consolidator:
 
         # Deterministic gradient from observations
         numeric_summary = self._extract_numeric_summary(self.micro_batch_buffer)
-        g = numeric_summary - np.mean(numeric_summary)
-        g_clip = np.clip(g, -1.0, 1.0)
+        mean_value = sum(numeric_summary) / len(numeric_summary)
+        g_clip = [self._clip(value - mean_value, -1.0, 1.0) for value in numeric_summary]
 
         # Shrink formula: phi <- phi - lr * g_clip - gamma * phi
         for i, key in enumerate(sorted(self.phi.keys())):
@@ -65,9 +81,9 @@ class Consolidator:
         """Prune parameters using quantile 0.1."""
         if not phi:
             return {}
-        values = np.array(list(phi.values()))
-        threshold = np.quantile(np.abs(values), 0.1)
-        return {k: v for k, v in phi.items() if np.abs(v) > threshold}
+        magnitudes = sorted(abs(value) for value in phi.values())
+        threshold = self._quantile(magnitudes, 0.1)
+        return {k: v for k, v in phi.items() if abs(v) > threshold}
 
     def generate_snapshot(self) -> Optional[SnapshotRef]:
         """Generate snapshot of candidate adapter."""

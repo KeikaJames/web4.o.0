@@ -12,6 +12,14 @@ class AdapterMode(Enum):
     SHADOW_EVAL = "shadow_eval"
 
 
+class ObservationType(Enum):
+    """Observation classes used for Chronara routing."""
+
+    EXPLICIT_ONLY = "explicit_only"
+    STRATEGY_ONLY = "strategy_only"
+    PARAMETER_CANDIDATE = "parameter_candidate"
+
+
 @dataclass
 class AdapterRef:
     """Reference to a specific adapter generation."""

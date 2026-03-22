@@ -24,6 +24,7 @@ def test_collector_admission_gate():
     obs_explicit = {"explicit_feedback": True}
     obs_type = collector.admit_observation(obs_explicit)
     assert obs_type == ObservationType.EXPLICIT_ONLY
+    assert collector.explicit_trace == [obs_explicit]
 
 
 def test_consolidator_candidate_lifecycle():
