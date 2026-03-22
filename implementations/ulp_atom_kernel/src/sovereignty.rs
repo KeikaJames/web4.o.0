@@ -10,9 +10,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::atom::{AtomKind, ComputeAtom, Region};
 use crate::backend::Backend;
+use crate::client::RemoteClient;
 use crate::kernel::{self, AtomRequest, AtomResponse};
 use crate::kv::KVChunk;
 use crate::router::{NodeProfile, PlacementDecision};
+use crate::runtime::{claim_slot_http, DiscoveryPool, Nonce};
 use crate::shard::LoadedShard;
 
 // ---------------------------------------------------------------------------
@@ -94,23 +96,7 @@ impl HomeNode {
         request: &HomeExecutionRequest,
         result: EphemeralExecutionResult,
     ) -> HomeExecutionResponse {
-        // Absorb any KV chunks produced by the ephemeral execution
-        for chunk in &result.kv_produced {
-            // Replace existing chunk with same id, or append
-            if let Some(pos) = self.kv_store.iter().position(|c| c.chunk_id == chunk.chunk_id) {
-                self.kv_store[pos] = chunk.clone();
-            } else {
-                self.kv_store.push(chunk.clone());
-            }
-        }
-
-        HomeExecutionResponse {
-            home_node_id: request.home_node_id.clone(),
-            output: result.output,
-            tokens_produced: result.tokens_produced,
-            kv_absorbed: result.kv_produced.len(),
-            ephemeral_node_id: result.ephemeral_node_id,
-        }
+        self.finish_result(&request.home_node_id, result)
     }
 
     /// PRIB path: blind the input, prepare outsource request with mask.
@@ -167,25 +153,8 @@ impl HomeNode {
         request: &HomeExecutionRequest,
         result: EphemeralExecutionResult,
     ) -> HomeExecutionResponse {
-        // Unblind the output using the mask from the original request
         let real_output = crate::prib::unblind(&result.output, &request.prib_mask);
-
-        // Absorb KV chunks
-        for chunk in &result.kv_produced {
-            if let Some(pos) = self.kv_store.iter().position(|c| c.chunk_id == chunk.chunk_id) {
-                self.kv_store[pos] = chunk.clone();
-            } else {
-                self.kv_store.push(chunk.clone());
-            }
-        }
-
-        HomeExecutionResponse {
-            home_node_id: request.home_node_id.clone(),
-            output: real_output,
-            tokens_produced: result.tokens_produced,
-            kv_absorbed: result.kv_produced.len(),
-            ephemeral_node_id: result.ephemeral_node_id,
-        }
+        self.finish_result_with_output(&request.home_node_id, real_output, result)
     }
 
     /// Two-stage outsourced execution: Prefill → Decode through the sovereignty
@@ -227,7 +196,11 @@ impl HomeNode {
 
         // Absorb prefill KV into home store
         for chunk in &prefill_eph_result.kv_produced {
-            if let Some(pos) = self.kv_store.iter().position(|c| c.chunk_id == chunk.chunk_id) {
+            if let Some(pos) = self
+                .kv_store
+                .iter()
+                .position(|c| c.chunk_id == chunk.chunk_id)
+            {
                 self.kv_store[pos] = chunk.clone();
             } else {
                 self.kv_store.push(chunk.clone());
@@ -266,7 +239,11 @@ impl HomeNode {
 
         let kv_absorbed = decode_eph_result.kv_produced.len();
         for chunk in &decode_eph_result.kv_produced {
-            if let Some(pos) = self.kv_store.iter().position(|c| c.chunk_id == chunk.chunk_id) {
+            if let Some(pos) = self
+                .kv_store
+                .iter()
+                .position(|c| c.chunk_id == chunk.chunk_id)
+            {
                 self.kv_store[pos] = chunk.clone();
             } else {
                 self.kv_store.push(chunk.clone());
@@ -301,6 +278,275 @@ impl HomeNode {
         let response = kernel::dispatch(backend, request)?;
         self.kv_store = response.exec_response.kv_state.clone();
         Ok(response)
+    }
+
+    fn absorb_kv(&mut self, chunks: &[KVChunk]) -> usize {
+        for chunk in chunks {
+            if let Some(pos) = self
+                .kv_store
+                .iter()
+                .position(|c| c.chunk_id == chunk.chunk_id)
+            {
+                self.kv_store[pos] = chunk.clone();
+            } else {
+                self.kv_store.push(chunk.clone());
+            }
+        }
+        chunks.len()
+    }
+
+    fn finish_result(
+        &mut self,
+        home_node_id: &str,
+        result: EphemeralExecutionResult,
+    ) -> HomeExecutionResponse {
+        self.finish_result_with_output(home_node_id, result.output.clone(), result)
+    }
+
+    fn finish_result_with_output(
+        &mut self,
+        home_node_id: &str,
+        output: Vec<u8>,
+        result: EphemeralExecutionResult,
+    ) -> HomeExecutionResponse {
+        let kv_absorbed = self.absorb_kv(&result.kv_produced);
+        HomeExecutionResponse {
+            home_node_id: home_node_id.to_string(),
+            output,
+            tokens_produced: result.tokens_produced,
+            kv_absorbed,
+            ephemeral_node_id: result.ephemeral_node_id,
+        }
+    }
+
+    pub async fn execute_remote_with_runtime(
+        &mut self,
+        client: &RemoteClient,
+        atom: &ComputeAtom,
+        input: Vec<u8>,
+        pool: &DiscoveryPool,
+        nonce_seed: u64,
+        timeout_ms: u64,
+    ) -> Result<HomeExecutionResponse, String> {
+        let stage = self
+            .execute_remote_stage(
+                client,
+                atom,
+                input,
+                self.kv_store.clone(),
+                pool,
+                nonce_seed,
+                timeout_ms,
+            )
+            .await?;
+
+        Ok(HomeExecutionResponse {
+            home_node_id: self.node_id.clone(),
+            output: stage.output,
+            tokens_produced: stage.tokens_produced,
+            kv_absorbed: stage.kv_produced.len(),
+            ephemeral_node_id: stage.node_id,
+        })
+    }
+
+    pub async fn execute_two_stage_remote_with_runtime(
+        &mut self,
+        client: &RemoteClient,
+        prefill_atom: &ComputeAtom,
+        decode_atom: &ComputeAtom,
+        input: Vec<u8>,
+        pool: &DiscoveryPool,
+        prefill_nonce_seed: u64,
+        decode_nonce_seed: u64,
+        timeout_ms: u64,
+    ) -> Result<TwoStageOutsourcedResponse, String> {
+        let prefill_stage = self
+            .execute_remote_stage(
+                client,
+                prefill_atom,
+                input,
+                self.kv_store.clone(),
+                pool,
+                prefill_nonce_seed,
+                timeout_ms,
+            )
+            .await?;
+
+        let prefill_receipt = PrefillReceipt {
+            atom_id: prefill_atom.id.clone(),
+            prefill_node_id: prefill_stage.node_id.clone(),
+            tokens_produced: prefill_stage.tokens_produced,
+            kv_produced: prefill_stage.kv_produced.clone(),
+            prefill_output: prefill_stage.output.clone(),
+        };
+
+        let decode_stage = self
+            .execute_remote_stage(
+                client,
+                decode_atom,
+                prefill_receipt.prefill_output.clone(),
+                prefill_receipt.kv_produced.clone(),
+                pool,
+                decode_nonce_seed,
+                timeout_ms,
+            )
+            .await?;
+
+        Ok(TwoStageOutsourcedResponse {
+            home_node_id: self.node_id.clone(),
+            prefill_node_id: prefill_receipt.prefill_node_id,
+            decode_node_id: decode_stage.node_id.clone(),
+            output: decode_stage.output,
+            tokens_produced: decode_stage.tokens_produced,
+            kv_absorbed: decode_stage.kv_produced.len(),
+            kv_migrated: prefill_stage.node_id != decode_stage.node_id,
+        })
+    }
+
+    /// Convenience wrapper for explicit, trusted endpoints.
+    pub async fn execute_two_stage_remote(
+        &mut self,
+        prefill_atom: &ComputeAtom,
+        decode_atom: &ComputeAtom,
+        input: Vec<u8>,
+        prefill_endpoint: &str,
+        decode_endpoint: &str,
+        prefill_nonce: Nonce,
+        decode_nonce: Nonce,
+    ) -> Result<TwoStageOutsourcedResponse, String> {
+        let mut pool = DiscoveryPool::new();
+        pool.register(remote_offer(
+            "prefill-remote",
+            prefill_endpoint,
+            &prefill_atom.region,
+            vec![prefill_atom.kind.clone()],
+            1,
+            30_000,
+        ));
+        pool.register(remote_offer(
+            "decode-remote",
+            decode_endpoint,
+            &decode_atom.region,
+            vec![decode_atom.kind.clone()],
+            1,
+            30_000,
+        ));
+
+        self.execute_two_stage_remote_with_runtime(
+            &RemoteClient::new_trusted(),
+            prefill_atom,
+            decode_atom,
+            input,
+            &pool,
+            prefill_nonce.0,
+            decode_nonce.0,
+            30_000,
+        )
+        .await
+    }
+
+    async fn execute_remote_stage(
+        &mut self,
+        client: &RemoteClient,
+        atom: &ComputeAtom,
+        input: Vec<u8>,
+        kv_chunks: Vec<KVChunk>,
+        pool: &DiscoveryPool,
+        nonce_seed: u64,
+        timeout_ms: u64,
+    ) -> Result<RemoteStageReceipt, String> {
+        let stage = ExecutionStage::for_atom_kind(&atom.kind);
+        let mut remaining = pool.clone();
+        let mut next_seed = nonce_seed;
+        let mut last_err = String::new();
+
+        while !remaining.is_empty() {
+            let claimed = match claim_slot_http(
+                client,
+                &remaining,
+                &self.node_id,
+                &atom.kind,
+                None,
+                next_seed,
+                timeout_ms,
+            )
+            .await
+            {
+                Ok(claimed) => claimed,
+                Err(e) => {
+                    return Err(if last_err.is_empty() {
+                        e
+                    } else {
+                        format!("{last_err}; {e}")
+                    })
+                }
+            };
+            next_seed += claimed.attempts as u64;
+
+            let endpoint = match claimed.offer.endpoint.as_deref() {
+                Some(endpoint) => endpoint,
+                None => {
+                    last_err = format!("candidate '{}': missing endpoint", claimed.offer.node_id);
+                    remaining.deregister(&claimed.offer.node_id);
+                    continue;
+                }
+            };
+
+            let mask =
+                crate::prib::derive_mask(&format!("{}:{}", atom.id, self.node_id), input.len());
+            let request = BlindedAtomRequest {
+                blinded: BlindedAtom {
+                    atom_id: atom.id.clone(),
+                    kind: atom.kind.clone(),
+                    model_id: atom.model_id.clone(),
+                    input: crate::prib::blind(&input, &mask),
+                    kv_chunks: kv_chunks.clone(),
+                },
+                nonce: claimed.claim.nonce.clone(),
+                stage: stage.clone(),
+            };
+
+            match client.execute_blinded(endpoint, &request, timeout_ms).await {
+                Ok(response) => {
+                    if response.stage != stage {
+                        last_err = format!(
+                            "candidate '{}': stage mismatch: expected {:?}, got {:?}",
+                            claimed.offer.node_id, stage, response.stage
+                        );
+                        remaining.deregister(&claimed.offer.node_id);
+                        continue;
+                    }
+                    if !response.nonce.matches(&claimed.claim.nonce) {
+                        last_err = format!(
+                            "candidate '{}': nonce mismatch: expected {}, got {}",
+                            claimed.offer.node_id, claimed.claim.nonce.0, response.nonce.0
+                        );
+                        remaining.deregister(&claimed.offer.node_id);
+                        continue;
+                    }
+
+                    let output = crate::prib::unblind(&response.output, &mask);
+                    let kv_produced = response.kv_produced;
+                    self.absorb_kv(&kv_produced);
+                    return Ok(RemoteStageReceipt {
+                        node_id: response.ephemeral_node_id,
+                        output,
+                        tokens_produced: response.tokens_produced,
+                        kv_produced,
+                    });
+                }
+                Err(e) => {
+                    last_err = format!("candidate '{}': {}", claimed.offer.node_id, e);
+                    remaining.deregister(&claimed.offer.node_id);
+                }
+            }
+        }
+
+        Err(if last_err.is_empty() {
+            "no remote candidates available".to_string()
+        } else {
+            last_err
+        })
     }
 }
 
@@ -359,6 +605,7 @@ impl EphemeralNode {
             output: backend_response.output,
             tokens_produced: backend_response.tokens_produced,
             kv_produced: backend_response.kv_state,
+            nonce: None,
         })
     }
 }
@@ -367,9 +614,60 @@ impl EphemeralNode {
 // Boundary objects
 // ---------------------------------------------------------------------------
 
+/// Execution stage identifier for two-stage pipeline.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub enum ExecutionStage {
+    Prefill,
+    Decode,
+    General,
+}
+
+impl ExecutionStage {
+    pub fn for_atom_kind(kind: &AtomKind) -> Self {
+        match kind {
+            AtomKind::Prefill => ExecutionStage::Prefill,
+            AtomKind::Decode => ExecutionStage::Decode,
+            _ => ExecutionStage::General,
+        }
+    }
+}
+
+/// Remote execution request: BlindedAtom + nonce + stage.
+/// This is what HomeNode sends to Ephemeral HTTP endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BlindedAtomRequest {
+    pub blinded: BlindedAtom,
+    pub nonce: Nonce,
+    pub stage: ExecutionStage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BlindedAtomResponse {
+    pub ephemeral_node_id: String,
+    pub atom_id: String,
+    pub stage: ExecutionStage,
+    pub nonce: Nonce,
+    pub output: Vec<u8>,
+    pub tokens_produced: u32,
+    pub kv_produced: Vec<KVChunk>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteExecutionError {
+    pub code: String,
+    pub message: String,
+    pub stage: ExecutionStage,
+    pub nonce: Nonce,
+}
+
 /// A compute atom stripped of sovereignty metadata. This is what crosses
 /// the boundary from Home Node to Ephemeral Node.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BlindedAtom {
     pub atom_id: String,
     pub kind: AtomKind,
@@ -401,6 +699,9 @@ pub struct EphemeralExecutionResult {
     pub tokens_produced: u32,
     /// KV chunks produced during execution — will be absorbed by home node.
     pub kv_produced: Vec<KVChunk>,
+    /// Nonce echoed back from the slot claim, for verification.
+    #[serde(default)]
+    pub nonce: Option<Nonce>,
 }
 
 /// Home node's final response after receiving and unblinding the result.
@@ -442,4 +743,34 @@ pub struct TwoStageOutsourcedResponse {
     pub kv_absorbed: usize,
     /// Whether KV was migrated between Prefill and Decode nodes.
     pub kv_migrated: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Remote execution helpers
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+struct RemoteStageReceipt {
+    node_id: String,
+    output: Vec<u8>,
+    tokens_produced: u32,
+    kv_produced: Vec<KVChunk>,
+}
+
+fn remote_offer(
+    node_id: &str,
+    endpoint: &str,
+    region: &Region,
+    supported_kinds: Vec<AtomKind>,
+    capacity_hint: u32,
+    expires_in_ms: u64,
+) -> crate::runtime::SlotOffer {
+    crate::runtime::SlotOffer {
+        node_id: node_id.to_string(),
+        region: region.clone(),
+        supported_kinds,
+        capacity_hint,
+        expires_in_ms,
+        endpoint: Some(endpoint.to_string()),
+    }
 }

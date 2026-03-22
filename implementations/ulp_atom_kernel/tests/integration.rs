@@ -1,5 +1,7 @@
 use ulp_atom_kernel::atom::*;
-use ulp_atom_kernel::backend::{Backend, BackendKind, BackendRequest, BackendResponse, DeviceCapabilities};
+use ulp_atom_kernel::backend::{
+    Backend, BackendKind, BackendRequest, BackendResponse, DeviceCapabilities,
+};
 use ulp_atom_kernel::exec::*;
 use ulp_atom_kernel::kernel::*;
 use ulp_atom_kernel::kv::*;
@@ -124,15 +126,19 @@ fn kv_locality_flips_routing_decision() {
     assert_eq!(no_kv.breakdown.node_id, "node-local");
 
     // with KV: all chunks in eu-central — node-far should win
-    let chunks: Vec<KVChunk> = (0..8).map(|i| KVChunk {
-        chunk_id: format!("kv-{}", i),
-        source_region: Region("eu-central".into()),
-        seq_start: i * 128,
-        seq_end: (i + 1) * 128 - 1,
-        byte_size: 65536,
-        payload: vec![],
-    }).collect();
-    let ctx = KVContext { active_chunks: &chunks };
+    let chunks: Vec<KVChunk> = (0..8)
+        .map(|i| KVChunk {
+            chunk_id: format!("kv-{}", i),
+            source_region: Region("eu-central".into()),
+            seq_start: i * 128,
+            seq_end: (i + 1) * 128 - 1,
+            byte_size: 65536,
+            payload: vec![],
+        })
+        .collect();
+    let ctx = KVContext {
+        active_chunks: &chunks,
+    };
     let with_kv = route_with_kv(&atom, &nodes, Some(&ctx)).unwrap();
     assert_eq!(with_kv.breakdown.node_id, "node-far");
     assert!(with_kv.breakdown.kv_locality_score > no_kv.breakdown.kv_locality_score);
@@ -143,7 +149,9 @@ fn route_with_kv_reports_migration_cost() {
     let atom = make_atom();
     let nodes = make_nodes();
     let chunks = vec![make_chunk()]; // chunk in us-west
-    let ctx = KVContext { active_chunks: &chunks };
+    let ctx = KVContext {
+        active_chunks: &chunks,
+    };
     let decision = route_with_kv(&atom, &nodes, Some(&ctx)).unwrap();
     // winner is node-a (us-west), chunk is already there — zero migration cost
     assert_eq!(decision.estimated_migration_cost, 0.0);
@@ -275,7 +283,11 @@ impl Backend for StubKernel {
         })
     }
 
-    fn migrate_kv(&self, chunk: KVChunk, target: Region) -> Result<(KVChunk, MigrationReceipt), String> {
+    fn migrate_kv(
+        &self,
+        chunk: KVChunk,
+        target: Region,
+    ) -> Result<(KVChunk, MigrationReceipt), String> {
         Ok(migrate(chunk, target))
     }
 
@@ -293,7 +305,11 @@ impl Backend for StubKernel {
 }
 
 impl ComputeKernel for StubKernel {
-    fn execute(&self, request: ExecRequest, _placement: &PlacementDecision) -> Result<ExecResponse, String> {
+    fn execute(
+        &self,
+        request: ExecRequest,
+        _placement: &PlacementDecision,
+    ) -> Result<ExecResponse, String> {
         Ok(ExecResponse {
             atom_id: request.atom_id,
             output: request.input.iter().map(|b| b.wrapping_add(1)).collect(),
@@ -302,7 +318,11 @@ impl ComputeKernel for StubKernel {
         })
     }
 
-    fn migrate_kv(&self, chunk: KVChunk, target: Region) -> Result<(KVChunk, MigrationReceipt), String> {
+    fn migrate_kv(
+        &self,
+        chunk: KVChunk,
+        target: Region,
+    ) -> Result<(KVChunk, MigrationReceipt), String> {
         Ok(migrate(chunk, target))
     }
 }
@@ -345,7 +365,8 @@ fn exec_boundary_accepts_request_with_placement() {
 fn exec_boundary_migrate_kv_delegates_correctly() {
     let kernel = StubKernel;
     let chunk = make_chunk();
-    let (migrated, receipt) = ComputeKernel::migrate_kv(&kernel, chunk, Region("ap-east".into())).unwrap();
+    let (migrated, receipt) =
+        ComputeKernel::migrate_kv(&kernel, chunk, Region("ap-east".into())).unwrap();
     assert_eq!(migrated.source_region, Region("ap-east".into()));
     assert_eq!(receipt.from, Region("us-west".into()));
 }
@@ -484,9 +505,18 @@ fn placement_decision_cbor_roundtrip() {
     let bytes = encode_cbor(&decision).unwrap();
     let decoded: PlacementDecision = decode_cbor(&bytes).unwrap();
     assert_eq!(decoded.breakdown.node_id, decision.breakdown.node_id);
-    assert_eq!(decoded.breakdown.final_score, decision.breakdown.final_score);
-    assert_eq!(decoded.requires_kv_migration, decision.requires_kv_migration);
-    assert_eq!(decoded.estimated_migration_cost, decision.estimated_migration_cost);
+    assert_eq!(
+        decoded.breakdown.final_score,
+        decision.breakdown.final_score
+    );
+    assert_eq!(
+        decoded.requires_kv_migration,
+        decision.requires_kv_migration
+    );
+    assert_eq!(
+        decoded.estimated_migration_cost,
+        decision.estimated_migration_cost
+    );
 }
 
 #[test]
@@ -514,7 +544,10 @@ fn dispatch_result_json_roundtrip() {
     let json_bytes = encode_json(&resp).unwrap();
     let decoded: AtomResponse = decode_json(&json_bytes).unwrap();
     assert_eq!(decoded.placement.breakdown.node_id, "node-a");
-    assert_eq!(decoded.placement.breakdown.kv_locality_score, resp.placement.breakdown.kv_locality_score);
+    assert_eq!(
+        decoded.placement.breakdown.kv_locality_score,
+        resp.placement.breakdown.kv_locality_score
+    );
     assert_eq!(decoded.exec_response.tokens_produced, 1);
 }
 
@@ -591,7 +624,10 @@ fn runner_sample_file_dispatches() {
     let resp: AtomResponse = serde_json::from_str(&output).unwrap();
     assert_eq!(resp.exec_response.atom_id, "atom-agent-demo");
     // "Hello ULP" = [72,101,108,108,111,32,85,76,80] → uppercased = [72,69,76,76,79,32,85,76,80]
-    assert_eq!(resp.exec_response.output, vec![72, 69, 76, 76, 79, 32, 85, 76, 80]);
+    assert_eq!(
+        resp.exec_response.output,
+        vec![72, 69, 76, 76, 79, 32, 85, 76, 80]
+    );
     assert_eq!(resp.placement.breakdown.node_id, "local-0");
 }
 
@@ -661,7 +697,10 @@ fn runner_kv_locality_shifts_placement() {
     let with_kv = runner::run_request(req_json, Some(nodes_json), Some(kv_json)).unwrap();
     let resp_kv: AtomResponse = serde_json::from_str(&with_kv).unwrap();
     assert_eq!(resp_kv.placement.breakdown.node_id, "n-eu");
-    assert!(resp_kv.placement.breakdown.kv_locality_score > resp_no_kv.placement.breakdown.kv_locality_score);
+    assert!(
+        resp_kv.placement.breakdown.kv_locality_score
+            > resp_no_kv.placement.breakdown.kv_locality_score
+    );
 }
 
 #[test]
@@ -732,7 +771,11 @@ impl Backend for KvAwareKernel {
         self.execute_prefill(request)
     }
 
-    fn migrate_kv(&self, chunk: KVChunk, target: Region) -> Result<(KVChunk, MigrationReceipt), String> {
+    fn migrate_kv(
+        &self,
+        chunk: KVChunk,
+        target: Region,
+    ) -> Result<(KVChunk, MigrationReceipt), String> {
         Ok(migrate(chunk, target))
     }
 
@@ -799,14 +842,16 @@ fn phase_test_nodes() -> Vec<NodeProfile> {
 }
 
 fn phase_test_kv() -> Vec<KVChunk> {
-    (0..6).map(|i| KVChunk {
-        chunk_id: format!("kv-{i}"),
-        source_region: Region("eu-central".into()),
-        seq_start: i * 256,
-        seq_end: (i + 1) * 256 - 1,
-        byte_size: 32768,
-        payload: vec![],
-    }).collect()
+    (0..6)
+        .map(|i| KVChunk {
+            chunk_id: format!("kv-{i}"),
+            source_region: Region("eu-central".into()),
+            seq_start: i * 256,
+            seq_end: (i + 1) * 256 - 1,
+            byte_size: 32768,
+            payload: vec![],
+        })
+        .collect()
 }
 
 #[test]
@@ -837,8 +882,7 @@ fn prefill_and_decode_diverge_on_same_nodes() {
     // Prefill: sovereignty + engine weight high → prefers us-west (n-fast)
     // Decode: KV locality + latency dominate, but KV is all in eu-central → prefers n-kv-hot
     assert_ne!(
-        prefill_decision.breakdown.node_id,
-        decode_decision.breakdown.node_id,
+        prefill_decision.breakdown.node_id, decode_decision.breakdown.node_id,
         "prefill and decode should pick different nodes"
     );
     assert_eq!(prefill_decision.breakdown.node_id, "n-fast");
@@ -851,12 +895,18 @@ fn decode_more_sensitive_to_kv_locality_than_prefill() {
     let kv = phase_test_kv();
 
     let prefill_atom = ComputeAtom {
-        id: "p".into(), kind: AtomKind::Prefill,
-        region: Region("us-west".into()), model_id: "m".into(), shard_count: 0,
+        id: "p".into(),
+        kind: AtomKind::Prefill,
+        region: Region("us-west".into()),
+        model_id: "m".into(),
+        shard_count: 0,
     };
     let decode_atom = ComputeAtom {
-        id: "d".into(), kind: AtomKind::Decode,
-        region: Region("us-west".into()), model_id: "m".into(), shard_count: 0,
+        id: "d".into(),
+        kind: AtomKind::Decode,
+        region: Region("us-west".into()),
+        model_id: "m".into(),
+        shard_count: 0,
     };
 
     let ctx = KVContext { active_chunks: &kv };
@@ -867,18 +917,33 @@ fn decode_more_sensitive_to_kv_locality_than_prefill() {
     // The eu-central node has kv_locality_score=1.0 for both.
     // But decode weights it at 0.35 vs prefill at 0.15.
     // So the score gap between n-kv-hot and n-fast should be larger for decode.
-    let p_scores: Vec<_> = nodes.iter()
-        .map(|n| route_with_kv(&prefill_atom, &[n.clone()], Some(&ctx)).unwrap().breakdown.final_score)
+    let p_scores: Vec<_> = nodes
+        .iter()
+        .map(|n| {
+            route_with_kv(&prefill_atom, &[n.clone()], Some(&ctx))
+                .unwrap()
+                .breakdown
+                .final_score
+        })
         .collect();
-    let d_scores: Vec<_> = nodes.iter()
-        .map(|n| route_with_kv(&decode_atom, &[n.clone()], Some(&ctx)).unwrap().breakdown.final_score)
+    let d_scores: Vec<_> = nodes
+        .iter()
+        .map(|n| {
+            route_with_kv(&decode_atom, &[n.clone()], Some(&ctx))
+                .unwrap()
+                .breakdown
+                .final_score
+        })
         .collect();
 
     let p_gap = (p_scores[0] - p_scores[1]).abs();
     let d_gap = (d_scores[0] - d_scores[1]).abs();
 
     // Decode's score gap should differ from prefill's — the weighting is different
-    assert!((p_gap - d_gap).abs() > 0.01, "phase weights should produce different score gaps");
+    assert!(
+        (p_gap - d_gap).abs() > 0.01,
+        "phase weights should produce different score gaps"
+    );
 }
 
 #[test]
@@ -887,19 +952,31 @@ fn prefill_tolerates_cross_region_migration() {
     let kv = phase_test_kv(); // all in eu-central
 
     let prefill_atom = ComputeAtom {
-        id: "p".into(), kind: AtomKind::Prefill,
-        region: Region("us-west".into()), model_id: "m".into(), shard_count: 0,
+        id: "p".into(),
+        kind: AtomKind::Prefill,
+        region: Region("us-west".into()),
+        model_id: "m".into(),
+        shard_count: 0,
     };
     let decode_atom = ComputeAtom {
-        id: "d".into(), kind: AtomKind::Decode,
-        region: Region("us-west".into()), model_id: "m".into(), shard_count: 0,
+        id: "d".into(),
+        kind: AtomKind::Decode,
+        region: Region("us-west".into()),
+        model_id: "m".into(),
+        shard_count: 0,
     };
 
     let prefill_req = AtomRequest {
-        atom: prefill_atom, input: vec![1], kv_state: kv.clone(), candidates: nodes.clone(),
+        atom: prefill_atom,
+        input: vec![1],
+        kv_state: kv.clone(),
+        candidates: nodes.clone(),
     };
     let decode_req = AtomRequest {
-        atom: decode_atom, input: vec![1], kv_state: kv, candidates: nodes,
+        atom: decode_atom,
+        input: vec![1],
+        kv_state: kv,
+        candidates: nodes,
     };
 
     let kernel = StubKernel;
@@ -907,9 +984,15 @@ fn prefill_tolerates_cross_region_migration() {
     let d_resp = dispatch(&kernel, decode_req).unwrap();
 
     // Prefill picks n-fast (us-west) → KV must migrate from eu-central
-    assert!(!p_resp.migrations.is_empty(), "prefill should trigger KV migration");
+    assert!(
+        !p_resp.migrations.is_empty(),
+        "prefill should trigger KV migration"
+    );
     // Decode picks n-kv-hot (eu-central) → KV already there
-    assert!(d_resp.migrations.is_empty(), "decode should avoid KV migration");
+    assert!(
+        d_resp.migrations.is_empty(),
+        "decode should avoid KV migration"
+    );
 }
 
 #[test]
@@ -948,8 +1031,7 @@ fn runner_prefill_and_decode_diverge_via_files() {
 
     // With KV in eu-central: decode should favor eu-central, prefill should favor us-west
     assert_ne!(
-        p_resp.placement.breakdown.node_id,
-        d_resp.placement.breakdown.node_id,
+        p_resp.placement.breakdown.node_id, d_resp.placement.breakdown.node_id,
         "prefill and decode should route differently via runner"
     );
 }
@@ -998,7 +1080,7 @@ fn specialization_pair() -> (NodeProfile, NodeProfile) {
         sovereignty_zone: "us-west".into(),
         prefill_affinity: 0.95,
         decode_affinity: 0.2,
-            capacity: Default::default(),
+        capacity: Default::default(),
     };
     let decode_node = NodeProfile {
         node_id: "decode-spec".into(),
@@ -1009,7 +1091,7 @@ fn specialization_pair() -> (NodeProfile, NodeProfile) {
         sovereignty_zone: "us-west".into(),
         prefill_affinity: 0.2,
         decode_affinity: 0.95,
-            capacity: Default::default(),
+        capacity: Default::default(),
     };
     (prefill_node, decode_node)
 }
@@ -1018,8 +1100,11 @@ fn specialization_pair() -> (NodeProfile, NodeProfile) {
 fn specialization_favors_prefill_node_for_prefill() {
     let (pn, dn) = specialization_pair();
     let atom = ComputeAtom {
-        id: "p".into(), kind: AtomKind::Prefill,
-        region: Region("us-west".into()), model_id: "m".into(), shard_count: 0,
+        id: "p".into(),
+        kind: AtomKind::Prefill,
+        region: Region("us-west".into()),
+        model_id: "m".into(),
+        shard_count: 0,
     };
     let decision = route(&atom, &[pn, dn]).unwrap();
     assert_eq!(decision.breakdown.node_id, "prefill-spec");
@@ -1029,8 +1114,11 @@ fn specialization_favors_prefill_node_for_prefill() {
 fn specialization_favors_decode_node_for_decode() {
     let (pn, dn) = specialization_pair();
     let atom = ComputeAtom {
-        id: "d".into(), kind: AtomKind::Decode,
-        region: Region("us-west".into()), model_id: "m".into(), shard_count: 0,
+        id: "d".into(),
+        kind: AtomKind::Decode,
+        region: Region("us-west".into()),
+        model_id: "m".into(),
+        shard_count: 0,
     };
     let decision = route(&atom, &[pn, dn]).unwrap();
     assert_eq!(decision.breakdown.node_id, "decode-spec");
@@ -1040,22 +1128,32 @@ fn specialization_favors_decode_node_for_decode() {
 fn specialization_visible_in_breakdown() {
     let (pn, dn) = specialization_pair();
     let atom = ComputeAtom {
-        id: "p".into(), kind: AtomKind::Prefill,
-        region: Region("us-west".into()), model_id: "m".into(), shard_count: 0,
+        id: "p".into(),
+        kind: AtomKind::Prefill,
+        region: Region("us-west".into()),
+        model_id: "m".into(),
+        shard_count: 0,
     };
     let decision = route(&atom, &[pn.clone(), dn.clone()]).unwrap();
     assert_eq!(decision.breakdown.node_id, "prefill-spec");
-    assert!(decision.breakdown.specialization_score > 0.9,
-        "prefill node should have high specialization for prefill atom");
+    assert!(
+        decision.breakdown.specialization_score > 0.9,
+        "prefill node should have high specialization for prefill atom"
+    );
 
     let atom_d = ComputeAtom {
-        id: "d".into(), kind: AtomKind::Decode,
-        region: Region("us-west".into()), model_id: "m".into(), shard_count: 0,
+        id: "d".into(),
+        kind: AtomKind::Decode,
+        region: Region("us-west".into()),
+        model_id: "m".into(),
+        shard_count: 0,
     };
     let decision_d = route(&atom_d, &[pn, dn]).unwrap();
     assert_eq!(decision_d.breakdown.node_id, "decode-spec");
-    assert!(decision_d.breakdown.specialization_score > 0.9,
-        "decode node should have high specialization for decode atom");
+    assert!(
+        decision_d.breakdown.specialization_score > 0.9,
+        "decode node should have high specialization for decode atom"
+    );
 }
 
 // --- PlacementExplain stability tests ---
@@ -1084,7 +1182,9 @@ fn explain_present_in_runner_output() {
     let req = std::fs::read_to_string("examples/sample_request.json").unwrap();
     let output = runner::run_from_json(&req).unwrap();
     let val: serde_json::Value = serde_json::from_str(&output).unwrap();
-    let e = val.get("explain").expect("explain must be in runner output");
+    let e = val
+        .get("explain")
+        .expect("explain must be in runner output");
     assert!(e["final_score"].as_f64().unwrap() > 0.0);
     assert_eq!(e["chunks_migrated"].as_u64().unwrap(), 0);
 }
@@ -1098,15 +1198,20 @@ fn explain_reflects_migration_when_it_happens() {
         kv_state: vec![KVChunk {
             chunk_id: "kv-x".into(),
             source_region: Region("eu-central".into()),
-            seq_start: 0, seq_end: 31, byte_size: 512,
+            seq_start: 0,
+            seq_end: 31,
+            byte_size: 512,
             payload: vec![0xDD; 512],
         }],
         candidates: make_nodes(),
     };
     let resp = dispatch(&kernel, req).unwrap();
-    assert!(resp.explain.requires_kv_migration || resp.explain.chunks_migrated > 0
-        || resp.explain.migration_cost > 0.0,
-        "explain should reflect migration");
+    assert!(
+        resp.explain.requires_kv_migration
+            || resp.explain.chunks_migrated > 0
+            || resp.explain.migration_cost > 0.0,
+        "explain should reflect migration"
+    );
     assert_eq!(resp.explain.chunks_migrated, resp.migrations.len());
 }
 
@@ -1118,17 +1223,27 @@ fn explain_shows_specialization_for_prefill_and_decode() {
 
     let p_req = AtomRequest {
         atom: ComputeAtom {
-            id: "p".into(), kind: AtomKind::Prefill,
-            region: Region("us-west".into()), model_id: "m".into(), shard_count: 0,
+            id: "p".into(),
+            kind: AtomKind::Prefill,
+            region: Region("us-west".into()),
+            model_id: "m".into(),
+            shard_count: 0,
         },
-        input: vec![1], kv_state: kv.clone(), candidates: nodes.clone(),
+        input: vec![1],
+        kv_state: kv.clone(),
+        candidates: nodes.clone(),
     };
     let d_req = AtomRequest {
         atom: ComputeAtom {
-            id: "d".into(), kind: AtomKind::Decode,
-            region: Region("us-west".into()), model_id: "m".into(), shard_count: 0,
+            id: "d".into(),
+            kind: AtomKind::Decode,
+            region: Region("us-west".into()),
+            model_id: "m".into(),
+            shard_count: 0,
         },
-        input: vec![1], kv_state: kv, candidates: nodes,
+        input: vec![1],
+        kv_state: kv,
+        candidates: nodes,
     };
 
     let p_resp = dispatch(&kernel, p_req).unwrap();
@@ -1151,9 +1266,15 @@ fn breakdown_migration_cost_matches_decision() {
     let output = runner::run_request(&req, Some(&nodes), Some(&kv)).unwrap();
     let resp: AtomResponse = serde_json::from_str(&output).unwrap();
     // breakdown.migration_cost should equal decision.estimated_migration_cost
-    assert_eq!(resp.placement.breakdown.migration_cost, resp.placement.estimated_migration_cost);
+    assert_eq!(
+        resp.placement.breakdown.migration_cost,
+        resp.placement.estimated_migration_cost
+    );
     // explain.migration_cost should match too
-    assert_eq!(resp.explain.migration_cost, resp.placement.estimated_migration_cost);
+    assert_eq!(
+        resp.explain.migration_cost,
+        resp.placement.estimated_migration_cost
+    );
 }
 
 // --- Remote dispatch tests ---
@@ -1164,7 +1285,9 @@ async fn start_test_server() -> (String, tokio::task::JoinHandle<()>) {
     let url = format!("http://{}/dispatch", addr);
 
     let handle = tokio::spawn(async move {
-        axum::serve(listener, ulp_atom_kernel::server::app()).await.ok();
+        axum::serve(listener, ulp_atom_kernel::server::app())
+            .await
+            .ok();
     });
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -1173,7 +1296,7 @@ async fn start_test_server() -> (String, tokio::task::JoinHandle<()>) {
 
 #[tokio::test]
 async fn remote_dispatch_preserves_explain() {
-    use ulp_atom_kernel::client::dispatch_remote;
+    use ulp_atom_kernel::client::dispatch_remote_trusted;
 
     let (url, _handle) = start_test_server().await;
 
@@ -1184,7 +1307,7 @@ async fn remote_dispatch_preserves_explain() {
         candidates: make_nodes(),
     };
 
-    let resp = dispatch_remote(&url, req).await.unwrap();
+    let resp = dispatch_remote_trusted(&url, req).await.unwrap();
     assert_eq!(resp.explain.node_id, "node-a");
     assert!(resp.explain.final_score > 0.0);
     assert!(resp.explain.sovereignty_score > 0.0);
@@ -1193,7 +1316,7 @@ async fn remote_dispatch_preserves_explain() {
 
 #[tokio::test]
 async fn remote_dispatch_with_migration() {
-    use ulp_atom_kernel::client::dispatch_remote;
+    use ulp_atom_kernel::client::dispatch_remote_trusted;
 
     let (url, _handle) = start_test_server().await;
 
@@ -1203,13 +1326,15 @@ async fn remote_dispatch_with_migration() {
         kv_state: vec![KVChunk {
             chunk_id: "kv-remote".into(),
             source_region: Region("eu-central".into()),
-            seq_start: 0, seq_end: 31, byte_size: 512,
+            seq_start: 0,
+            seq_end: 31,
+            byte_size: 512,
             payload: vec![0xAA; 512],
         }],
         candidates: make_nodes(),
     };
 
-    let resp = dispatch_remote(&url, req).await.unwrap();
+    let resp = dispatch_remote_trusted(&url, req).await.unwrap();
     assert_eq!(resp.migrations.len(), 1);
     assert_eq!(resp.explain.chunks_migrated, 1);
     assert!(resp.explain.migration_cost > 0.0);
@@ -1218,7 +1343,7 @@ async fn remote_dispatch_with_migration() {
 
 #[tokio::test]
 async fn remote_dispatch_phase_divergence() {
-    use ulp_atom_kernel::client::dispatch_remote;
+    use ulp_atom_kernel::client::dispatch_remote_trusted;
 
     let (url, _handle) = start_test_server().await;
 
@@ -1227,22 +1352,32 @@ async fn remote_dispatch_phase_divergence() {
 
     let prefill_req = AtomRequest {
         atom: ComputeAtom {
-            id: "p".into(), kind: AtomKind::Prefill,
-            region: Region("us-west".into()), model_id: "m".into(), shard_count: 0,
+            id: "p".into(),
+            kind: AtomKind::Prefill,
+            region: Region("us-west".into()),
+            model_id: "m".into(),
+            shard_count: 0,
         },
-        input: vec![1], kv_state: kv.clone(), candidates: nodes.clone(),
+        input: vec![1],
+        kv_state: kv.clone(),
+        candidates: nodes.clone(),
     };
 
     let decode_req = AtomRequest {
         atom: ComputeAtom {
-            id: "d".into(), kind: AtomKind::Decode,
-            region: Region("us-west".into()), model_id: "m".into(), shard_count: 0,
+            id: "d".into(),
+            kind: AtomKind::Decode,
+            region: Region("us-west".into()),
+            model_id: "m".into(),
+            shard_count: 0,
         },
-        input: vec![1], kv_state: kv, candidates: nodes,
+        input: vec![1],
+        kv_state: kv,
+        candidates: nodes,
     };
 
-    let p_resp = dispatch_remote(&url, prefill_req).await.unwrap();
-    let d_resp = dispatch_remote(&url, decode_req).await.unwrap();
+    let p_resp = dispatch_remote_trusted(&url, prefill_req).await.unwrap();
+    let d_resp = dispatch_remote_trusted(&url, decode_req).await.unwrap();
 
     assert_ne!(p_resp.explain.node_id, d_resp.explain.node_id);
     assert!(p_resp.explain.specialization_score > 0.0);
@@ -1251,7 +1386,7 @@ async fn remote_dispatch_phase_divergence() {
 
 #[tokio::test]
 async fn remote_dispatch_empty_candidates_returns_400() {
-    use ulp_atom_kernel::client::dispatch_remote;
+    use ulp_atom_kernel::client::dispatch_remote_trusted;
 
     let (url, _handle) = start_test_server().await;
 
@@ -1262,7 +1397,7 @@ async fn remote_dispatch_empty_candidates_returns_400() {
         candidates: vec![],
     };
 
-    let err = dispatch_remote(&url, req).await.unwrap_err();
+    let err = dispatch_remote_trusted(&url, req).await.unwrap_err();
     assert!(err.contains("400") || err.contains("no candidate"));
 }
 
@@ -1287,7 +1422,7 @@ async fn federation_loads_multiple_remote_nodes() {
                 sovereignty_zone: "us-west".into(),
                 prefill_affinity: 0.5,
                 decode_affinity: 0.5,
-            capacity: Default::default(),
+                capacity: Default::default(),
             },
             endpoint: url1,
         },
@@ -1301,13 +1436,13 @@ async fn federation_loads_multiple_remote_nodes() {
                 sovereignty_zone: "eu-central".into(),
                 prefill_affinity: 0.5,
                 decode_affinity: 0.5,
-            capacity: Default::default(),
+                capacity: Default::default(),
             },
             endpoint: url2,
         },
     ];
 
-    let client = RemoteClient::new();
+    let client = RemoteClient::new_trusted();
     let atom = ComputeAtom {
         id: "fed-1".into(),
         kind: AtomKind::Inference,
@@ -1316,7 +1451,9 @@ async fn federation_loads_multiple_remote_nodes() {
         shard_count: 0,
     };
 
-    let resp = dispatch_federation(&client, atom, vec![0x61], vec![], &remote_nodes).await.unwrap();
+    let resp = dispatch_federation(&client, atom, vec![0x61], vec![], &remote_nodes)
+        .await
+        .unwrap();
     assert_eq!(resp.explain.node_id, "remote-a");
     assert_eq!(resp.exec_response.output, vec![0x41]);
 }
@@ -1340,7 +1477,7 @@ async fn federation_routes_to_different_nodes_based_on_conditions() {
                 sovereignty_zone: "us-west".into(),
                 prefill_affinity: 0.9,
                 decode_affinity: 0.3,
-            capacity: Default::default(),
+                capacity: Default::default(),
             },
             endpoint: url1,
         },
@@ -1354,13 +1491,13 @@ async fn federation_routes_to_different_nodes_based_on_conditions() {
                 sovereignty_zone: "us-west".into(),
                 prefill_affinity: 0.3,
                 decode_affinity: 0.9,
-            capacity: Default::default(),
+                capacity: Default::default(),
             },
             endpoint: url2,
         },
     ];
 
-    let client = RemoteClient::new();
+    let client = RemoteClient::new_trusted();
 
     let prefill_atom = ComputeAtom {
         id: "p".into(),
@@ -1378,8 +1515,12 @@ async fn federation_routes_to_different_nodes_based_on_conditions() {
         shard_count: 0,
     };
 
-    let p_resp = dispatch_federation(&client, prefill_atom, vec![0x62], vec![], &remote_nodes).await.unwrap();
-    let d_resp = dispatch_federation(&client, decode_atom, vec![0x63], vec![], &remote_nodes).await.unwrap();
+    let p_resp = dispatch_federation(&client, prefill_atom, vec![0x62], vec![], &remote_nodes)
+        .await
+        .unwrap();
+    let d_resp = dispatch_federation(&client, decode_atom, vec![0x63], vec![], &remote_nodes)
+        .await
+        .unwrap();
 
     assert_eq!(p_resp.explain.node_id, "prefill-node");
     assert_eq!(d_resp.explain.node_id, "decode-node");
@@ -1392,35 +1533,31 @@ async fn federation_preserves_explain_and_migration() {
 
     let (url, _h) = start_test_server().await;
 
-    let remote_nodes = vec![
-        RemoteNode {
-            profile: NodeProfile {
-                node_id: "target".into(),
-                region: Region("ap-east".into()),
-                latency_ms: 20.0,
-                hotness: 0.7,
-                supported_kinds: vec![AtomKind::Inference],
-                sovereignty_zone: "ap-east".into(),
-                prefill_affinity: 0.5,
-                decode_affinity: 0.5,
+    let remote_nodes = vec![RemoteNode {
+        profile: NodeProfile {
+            node_id: "target".into(),
+            region: Region("ap-east".into()),
+            latency_ms: 20.0,
+            hotness: 0.7,
+            supported_kinds: vec![AtomKind::Inference],
+            sovereignty_zone: "ap-east".into(),
+            prefill_affinity: 0.5,
+            decode_affinity: 0.5,
             capacity: Default::default(),
-            },
-            endpoint: url,
         },
-    ];
+        endpoint: url,
+    }];
 
-    let kv = vec![
-        KVChunk {
-            chunk_id: "kv-1".into(),
-            source_region: Region("us-west".into()),
-            seq_start: 0,
-            seq_end: 100,
-            byte_size: 1024,
-            payload: vec![],
-        },
-    ];
+    let kv = vec![KVChunk {
+        chunk_id: "kv-1".into(),
+        source_region: Region("us-west".into()),
+        seq_start: 0,
+        seq_end: 100,
+        byte_size: 1024,
+        payload: vec![],
+    }];
 
-    let client = RemoteClient::new();
+    let client = RemoteClient::new_trusted();
     let atom = ComputeAtom {
         id: "mig".into(),
         kind: AtomKind::Inference,
@@ -1429,7 +1566,9 @@ async fn federation_preserves_explain_and_migration() {
         shard_count: 0,
     };
 
-    let resp = dispatch_federation(&client, atom, vec![0x64], kv, &remote_nodes).await.unwrap();
+    let resp = dispatch_federation(&client, atom, vec![0x64], kv, &remote_nodes)
+        .await
+        .unwrap();
 
     assert_eq!(resp.explain.node_id, "target");
     assert!(resp.explain.requires_kv_migration);
@@ -1459,7 +1598,7 @@ async fn federation_kv_locality_affects_routing() {
                 sovereignty_zone: "us-west".into(),
                 prefill_affinity: 0.5,
                 decode_affinity: 0.5,
-            capacity: Default::default(),
+                capacity: Default::default(),
             },
             endpoint: url1,
         },
@@ -1473,7 +1612,7 @@ async fn federation_kv_locality_affects_routing() {
                 sovereignty_zone: "eu-central".into(),
                 prefill_affinity: 0.5,
                 decode_affinity: 0.5,
-            capacity: Default::default(),
+                capacity: Default::default(),
             },
             endpoint: url2,
         },
@@ -1498,7 +1637,7 @@ async fn federation_kv_locality_affects_routing() {
         },
     ];
 
-    let client = RemoteClient::new();
+    let client = RemoteClient::new_trusted();
     let atom = ComputeAtom {
         id: "kv-test".into(),
         kind: AtomKind::Decode,
@@ -1507,7 +1646,9 @@ async fn federation_kv_locality_affects_routing() {
         shard_count: 0,
     };
 
-    let resp = dispatch_federation(&client, atom, vec![0x65], kv, &remote_nodes).await.unwrap();
+    let resp = dispatch_federation(&client, atom, vec![0x65], kv, &remote_nodes)
+        .await
+        .unwrap();
 
     assert_eq!(resp.explain.node_id, "far-with-kv");
     assert!(!resp.explain.requires_kv_migration);
@@ -1518,10 +1659,12 @@ async fn federation_empty_nodes_returns_error() {
     use ulp_atom_kernel::client::RemoteClient;
     use ulp_atom_kernel::remote::dispatch_federation;
 
-    let client = RemoteClient::new();
+    let client = RemoteClient::new_trusted();
     let atom = make_atom();
 
-    let err = dispatch_federation(&client, atom, vec![0x66], vec![], &[]).await.unwrap_err();
+    let err = dispatch_federation(&client, atom, vec![0x66], vec![], &[])
+        .await
+        .unwrap_err();
     assert!(err.contains("no remote nodes"));
 }
 
@@ -1575,7 +1718,7 @@ async fn capacity_affects_prefill_placement() {
         },
     ];
 
-    let client = RemoteClient::new();
+    let client = RemoteClient::new_trusted();
     let atom = ComputeAtom {
         id: "prefill-test".into(),
         kind: AtomKind::Prefill,
@@ -1584,7 +1727,9 @@ async fn capacity_affects_prefill_placement() {
         shard_count: 0,
     };
 
-    let resp = dispatch_federation(&client, atom, vec![0x70], vec![], &remote_nodes).await.unwrap();
+    let resp = dispatch_federation(&client, atom, vec![0x70], vec![], &remote_nodes)
+        .await
+        .unwrap();
     assert_eq!(resp.explain.node_id, "high-vram");
     assert!(resp.explain.capacity_score > 0.5);
 }
@@ -1637,7 +1782,7 @@ async fn capacity_affects_decode_placement() {
         },
     ];
 
-    let client = RemoteClient::new();
+    let client = RemoteClient::new_trusted();
     let atom = ComputeAtom {
         id: "decode-test".into(),
         kind: AtomKind::Decode,
@@ -1646,7 +1791,9 @@ async fn capacity_affects_decode_placement() {
         shard_count: 0,
     };
 
-    let resp = dispatch_federation(&client, atom, vec![0x71], vec![], &remote_nodes).await.unwrap();
+    let resp = dispatch_federation(&client, atom, vec![0x71], vec![], &remote_nodes)
+        .await
+        .unwrap();
     assert_eq!(resp.explain.node_id, "low-load");
     assert!(resp.explain.capacity_score > 0.5);
 }
@@ -1699,10 +1846,12 @@ async fn overloaded_node_gets_lower_score() {
         },
     ];
 
-    let client = RemoteClient::new();
+    let client = RemoteClient::new_trusted();
     let atom = make_atom();
 
-    let resp = dispatch_federation(&client, atom, vec![0x72], vec![], &remote_nodes).await.unwrap();
+    let resp = dispatch_federation(&client, atom, vec![0x72], vec![], &remote_nodes)
+        .await
+        .unwrap();
     assert_eq!(resp.explain.node_id, "normal");
 }
 
@@ -1714,35 +1863,34 @@ async fn explain_shows_capacity_score() {
 
     let (url, _h) = start_test_server().await;
 
-    let remote_nodes = vec![
-        RemoteNode {
-            profile: NodeProfile {
-                node_id: "test-node".into(),
-                region: Region("us-west".into()),
-                latency_ms: 10.0,
-                hotness: 0.8,
-                supported_kinds: vec![AtomKind::Inference],
-                sovereignty_zone: "us-west".into(),
-                prefill_affinity: 0.5,
-                decode_affinity: 0.5,
-                capacity: NodeCapacity {
-                    available_vram_gb: 32.0,
-                    current_load: 0.2,
-                    active_kv_chunks: 10,
-                },
+    let remote_nodes = vec![RemoteNode {
+        profile: NodeProfile {
+            node_id: "test-node".into(),
+            region: Region("us-west".into()),
+            latency_ms: 10.0,
+            hotness: 0.8,
+            supported_kinds: vec![AtomKind::Inference],
+            sovereignty_zone: "us-west".into(),
+            prefill_affinity: 0.5,
+            decode_affinity: 0.5,
+            capacity: NodeCapacity {
+                available_vram_gb: 32.0,
+                current_load: 0.2,
+                active_kv_chunks: 10,
             },
-            endpoint: url,
         },
-    ];
+        endpoint: url,
+    }];
 
-    let client = RemoteClient::new();
+    let client = RemoteClient::new_trusted();
     let atom = make_atom();
 
-    let resp = dispatch_federation(&client, atom, vec![0x73], vec![], &remote_nodes).await.unwrap();
+    let resp = dispatch_federation(&client, atom, vec![0x73], vec![], &remote_nodes)
+        .await
+        .unwrap();
     assert!(resp.explain.capacity_score >= 0.0);
     assert!(resp.explain.capacity_score <= 1.0);
 }
-
 
 // --- Two-stage pipeline tests ---
 
@@ -1787,7 +1935,7 @@ async fn two_stage_pipeline_completes() {
         },
     ];
 
-    let client = RemoteClient::new();
+    let client = RemoteClient::new_trusted();
     let prefill_atom = ComputeAtom {
         id: "prefill".into(),
         kind: AtomKind::Prefill,
@@ -1804,7 +1952,16 @@ async fn two_stage_pipeline_completes() {
         shard_count: 0,
     };
 
-    let resp = execute_two_stage(&client, prefill_atom, decode_atom, vec![0x61], vec![], &remote_nodes).await.unwrap();
+    let resp = execute_two_stage(
+        &client,
+        prefill_atom,
+        decode_atom,
+        vec![0x61],
+        vec![],
+        &remote_nodes,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(resp.prefill_node, "prefill-node");
     assert_eq!(resp.decode_node, "decode-node");
@@ -1820,24 +1977,22 @@ async fn two_stage_same_node_no_migration() {
 
     let (url, _h) = start_test_server().await;
 
-    let remote_nodes = vec![
-        RemoteNode {
-            profile: NodeProfile {
-                node_id: "unified-node".into(),
-                region: Region("us-west".into()),
-                latency_ms: 10.0,
-                hotness: 0.9,
-                supported_kinds: vec![AtomKind::Prefill, AtomKind::Decode],
-                sovereignty_zone: "us-west".into(),
-                prefill_affinity: 0.8,
-                decode_affinity: 0.8,
-                capacity: Default::default(),
-            },
-            endpoint: url,
+    let remote_nodes = vec![RemoteNode {
+        profile: NodeProfile {
+            node_id: "unified-node".into(),
+            region: Region("us-west".into()),
+            latency_ms: 10.0,
+            hotness: 0.9,
+            supported_kinds: vec![AtomKind::Prefill, AtomKind::Decode],
+            sovereignty_zone: "us-west".into(),
+            prefill_affinity: 0.8,
+            decode_affinity: 0.8,
+            capacity: Default::default(),
         },
-    ];
+        endpoint: url,
+    }];
 
-    let client = RemoteClient::new();
+    let client = RemoteClient::new_trusted();
     let prefill_atom = ComputeAtom {
         id: "prefill".into(),
         kind: AtomKind::Prefill,
@@ -1854,7 +2009,16 @@ async fn two_stage_same_node_no_migration() {
         shard_count: 0,
     };
 
-    let resp = execute_two_stage(&client, prefill_atom, decode_atom, vec![0x62], vec![], &remote_nodes).await.unwrap();
+    let resp = execute_two_stage(
+        &client,
+        prefill_atom,
+        decode_atom,
+        vec![0x62],
+        vec![],
+        &remote_nodes,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(resp.prefill_node, "unified-node");
     assert_eq!(resp.decode_node, "unified-node");
@@ -1902,7 +2066,7 @@ async fn two_stage_preserves_stage_info() {
         },
     ];
 
-    let client = RemoteClient::new();
+    let client = RemoteClient::new_trusted();
     let prefill_atom = ComputeAtom {
         id: "p".into(),
         kind: AtomKind::Prefill,
@@ -1919,7 +2083,16 @@ async fn two_stage_preserves_stage_info() {
         shard_count: 0,
     };
 
-    let resp = execute_two_stage(&client, prefill_atom, decode_atom, vec![0x63], vec![], &remote_nodes).await.unwrap();
+    let resp = execute_two_stage(
+        &client,
+        prefill_atom,
+        decode_atom,
+        vec![0x63],
+        vec![],
+        &remote_nodes,
+    )
+    .await
+    .unwrap();
 
     assert!(resp.prefill_response.explain.specialization_score > 0.0);
     assert!(resp.decode_response.explain.specialization_score > 0.0);
@@ -2067,7 +2240,10 @@ fn vulkan_backend_real_compute_or_clear_error() {
         assert_eq!(resp.tokens_produced, 1);
     } else {
         let err = result.unwrap_err();
-        assert!(err.contains("Vulkan unavailable"), "error should be explicit: {err}");
+        assert!(
+            err.contains("Vulkan unavailable"),
+            "error should be explicit: {err}"
+        );
     }
 }
 
@@ -2081,8 +2257,16 @@ fn vulkan_backend_decode_matches_prefill() {
     }
 
     let input = vec![10, 20, 30, 40];
-    let req_p = BackendRequest { atom_id: "p".into(), input: input.clone(), kv_state: vec![] };
-    let req_d = BackendRequest { atom_id: "d".into(), input, kv_state: vec![] };
+    let req_p = BackendRequest {
+        atom_id: "p".into(),
+        input: input.clone(),
+        kv_state: vec![],
+    };
+    let req_d = BackendRequest {
+        atom_id: "d".into(),
+        input,
+        kv_state: vec![],
+    };
 
     let p = backend.execute_prefill(req_p).unwrap();
     let d = backend.execute_decode(req_d).unwrap();
@@ -2099,14 +2283,18 @@ fn vulkan_backend_empty_input() {
         return;
     }
 
-    let req = BackendRequest { atom_id: "e".into(), input: vec![], kv_state: vec![] };
+    let req = BackendRequest {
+        atom_id: "e".into(),
+        input: vec![],
+        kv_state: vec![],
+    };
     let resp = backend.execute_prefill(req).unwrap();
     assert!(resp.output.is_empty());
 }
 
 #[test]
 fn backend_selector_creates_vulkan() {
-    use ulp_atom_kernel::backend::{BackendType, BackendRequest};
+    use ulp_atom_kernel::backend::{BackendRequest, BackendType};
 
     let backend_type = BackendType::Vulkan(0);
     let backend = backend_type.create();
@@ -2218,13 +2406,22 @@ fn all_backends_have_device_capabilities() {
     let cuda = BackendType::Cuda(0).create();
 
     assert_eq!(mock.device_capabilities().device_name, "MockCPU");
-    assert!(http.device_capabilities().device_name.contains("HttpRemote"));
+    assert!(http
+        .device_capabilities()
+        .device_name
+        .contains("HttpRemote"));
     // Vulkan: real device name or "unavailable" marker
     let vk_name = vulkan.device_capabilities().device_name;
-    assert!(!vk_name.is_empty(), "vulkan device name should not be empty");
+    assert!(
+        !vk_name.is_empty(),
+        "vulkan device name should not be empty"
+    );
     // CUDA: real device name or "unavailable" marker
     let cuda_name = cuda.device_capabilities().device_name;
-    assert!(!cuda_name.is_empty(), "cuda device name should not be empty");
+    assert!(
+        !cuda_name.is_empty(),
+        "cuda device name should not be empty"
+    );
 }
 
 // --- DeviceCapabilities structure tests ---
@@ -2240,7 +2437,10 @@ fn capabilities_have_backend_kind() {
 
     assert_eq!(mock.device_capabilities().backend_kind, BackendKind::Mock);
     assert_eq!(http.device_capabilities().backend_kind, BackendKind::Http);
-    assert_eq!(vulkan.device_capabilities().backend_kind, BackendKind::Vulkan);
+    assert_eq!(
+        vulkan.device_capabilities().backend_kind,
+        BackendKind::Vulkan
+    );
     assert_eq!(cuda.device_capabilities().backend_kind, BackendKind::Cuda);
 }
 
@@ -2304,7 +2504,8 @@ fn capabilities_serialization_roundtrip() {
 
     let caps = BackendType::Mock.create().device_capabilities();
     let json = serde_json::to_string(&caps).unwrap();
-    let decoded: ulp_atom_kernel::backend::DeviceCapabilities = serde_json::from_str(&json).unwrap();
+    let decoded: ulp_atom_kernel::backend::DeviceCapabilities =
+        serde_json::from_str(&json).unwrap();
     assert_eq!(decoded.backend_kind, caps.backend_kind);
     assert_eq!(decoded.device_name, caps.device_name);
     assert_eq!(decoded.available, caps.available);
@@ -2332,9 +2533,7 @@ fn selector_auto_resolves() {
 fn selector_require_mock() {
     use ulp_atom_kernel::backend::selector::{resolve_backend, BackendPreference};
 
-    let resolved = resolve_backend(
-        BackendPreference::Require(BackendKind::Mock), 0, None,
-    ).unwrap();
+    let resolved = resolve_backend(BackendPreference::Require(BackendKind::Mock), 0, None).unwrap();
     assert_eq!(resolved.capabilities.backend_kind, BackendKind::Mock);
     assert!(!resolved.fallback_used);
 }
@@ -2344,8 +2543,11 @@ fn selector_require_http() {
     use ulp_atom_kernel::backend::selector::{resolve_backend, BackendPreference};
 
     let resolved = resolve_backend(
-        BackendPreference::Require(BackendKind::Http), 0, Some("http://test"),
-    ).unwrap();
+        BackendPreference::Require(BackendKind::Http),
+        0,
+        Some("http://test"),
+    )
+    .unwrap();
     assert_eq!(resolved.capabilities.backend_kind, BackendKind::Http);
 }
 
@@ -2353,9 +2555,7 @@ fn selector_require_http() {
 fn selector_require_http_without_endpoint_fails() {
     use ulp_atom_kernel::backend::selector::{resolve_backend, BackendPreference};
 
-    let err = resolve_backend(
-        BackendPreference::Require(BackendKind::Http), 0, None,
-    ).unwrap_err();
+    let err = resolve_backend(BackendPreference::Require(BackendKind::Http), 0, None).unwrap_err();
     assert!(err.contains("endpoint"));
 }
 
@@ -2363,9 +2563,7 @@ fn selector_require_http_without_endpoint_fails() {
 fn selector_require_vulkan_on_this_machine() {
     use ulp_atom_kernel::backend::selector::{resolve_backend, BackendPreference};
 
-    let result = resolve_backend(
-        BackendPreference::Require(BackendKind::Vulkan), 0, None,
-    );
+    let result = resolve_backend(BackendPreference::Require(BackendKind::Vulkan), 0, None);
     // Either succeeds (Vulkan available) or fails with clear message
     match result {
         Ok(r) => {
@@ -2383,9 +2581,8 @@ fn selector_require_vulkan_on_this_machine() {
 fn selector_prefer_vulkan_falls_back() {
     use ulp_atom_kernel::backend::selector::{resolve_backend, BackendPreference};
 
-    let resolved = resolve_backend(
-        BackendPreference::Prefer(BackendKind::Vulkan), 0, None,
-    ).unwrap();
+    let resolved =
+        resolve_backend(BackendPreference::Prefer(BackendKind::Vulkan), 0, None).unwrap();
     // Always succeeds: either Vulkan or Mock fallback
     assert!(resolved.capabilities.available);
     if resolved.capabilities.backend_kind == BackendKind::Vulkan {
@@ -2401,9 +2598,7 @@ fn selector_prefer_vulkan_falls_back() {
 fn selector_prefer_http_without_endpoint_falls_back() {
     use ulp_atom_kernel::backend::selector::{resolve_backend, BackendPreference};
 
-    let resolved = resolve_backend(
-        BackendPreference::Prefer(BackendKind::Http), 0, None,
-    ).unwrap();
+    let resolved = resolve_backend(BackendPreference::Prefer(BackendKind::Http), 0, None).unwrap();
     assert_eq!(resolved.capabilities.backend_kind, BackendKind::Mock);
     assert!(resolved.fallback_used);
 }
@@ -2476,7 +2671,9 @@ fn vulkan_invalid_device_index_is_unavailable() {
     if let Some(err) = backend.init_error() {
         // Must mention either "out of range" or loader failure — not silently succeed
         assert!(
-            err.contains("out of range") || err.contains("vulkan loader") || err.contains("no Vulkan"),
+            err.contains("out of range")
+                || err.contains("vulkan loader")
+                || err.contains("no Vulkan"),
             "unexpected error for device_index=999: {err}"
         );
     }
@@ -2568,7 +2765,10 @@ fn selector_auto_carries_device_info_through_dispatch() {
         candidates: make_nodes(),
     };
     let resp = dispatch(&*resolved.backend, req).unwrap();
-    assert_eq!(resp.backend_device.as_deref(), Some(expected_device.as_str()));
+    assert_eq!(
+        resp.backend_device.as_deref(),
+        Some(expected_device.as_str())
+    );
 }
 
 // --- Shard streaming tests ---
@@ -2596,7 +2796,10 @@ fn shard_ref_http_source_parses() {
 
     let json = r#"{"shard_id":"w1","source":{"http":"http://host/shard.bin"},"byte_size":512}"#;
     let shard: ShardRef = serde_json::from_str(json).unwrap();
-    assert_eq!(shard.source, ShardSource::Http("http://host/shard.bin".into()));
+    assert_eq!(
+        shard.source,
+        ShardSource::Http("http://host/shard.bin".into())
+    );
     assert_eq!(shard.byte_size, Some(512));
 }
 
@@ -2611,14 +2814,17 @@ fn shard_ref_byte_size_defaults_to_none() {
 
 #[test]
 fn shard_load_local_real_file() {
-    use ulp_atom_kernel::shard::{load_shard, ShardRef, ShardSource};
     use std::io::Write;
+    use ulp_atom_kernel::shard::{load_shard, ShardRef, ShardSource};
 
     let dir = std::env::temp_dir().join("ulp_shard_test");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("test_shard.bin");
     let payload = b"SHARD_DATA_1234";
-    std::fs::File::create(&path).unwrap().write_all(payload).unwrap();
+    std::fs::File::create(&path)
+        .unwrap()
+        .write_all(payload)
+        .unwrap();
 
     let shard = ShardRef {
         shard_id: "local-test".into(),
@@ -2651,9 +2857,9 @@ fn shard_load_local_missing_file_gives_clear_error() {
 
 #[test]
 fn shard_load_http_real_server() {
-    use ulp_atom_kernel::shard::{load_shard, ShardRef, ShardSource};
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use ulp_atom_kernel::shard::{load_shard_trusted, ShardRef, ShardSource};
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -2681,9 +2887,9 @@ fn shard_load_http_real_server() {
         shard_id: "http-test".into(),
         source: ShardSource::Http(format!("http://127.0.0.1:{}/shard.bin", port)),
         byte_size: None,
-        checksum: None,
+        checksum: Some("6ff1ce529b43a852".into()),
     };
-    let loaded = load_shard(&shard).unwrap();
+    let loaded = load_shard_trusted(&shard).unwrap();
     assert_eq!(loaded.shard_id, "http-test");
     assert_eq!(loaded.data, payload);
     assert_eq!(loaded.byte_size, payload.len() as u64);
@@ -2699,24 +2905,24 @@ fn shard_load_unsupported_scheme_rejected() {
         shard_id: "ftp".into(),
         source: ShardSource::Http("ftp://example.com/shard.bin".into()),
         byte_size: None,
-        checksum: None,
+        checksum: Some("deadbeefdeadbeef".into()),
     };
     let err = load_shard(&shard).unwrap_err();
-    assert!(err.contains("only http:// and https://"), "error: {err}");
+    assert!(err.contains("http:// or https://"), "error: {err}");
 }
 
 #[test]
 fn shard_load_http_bad_host_gives_clear_error() {
-    use ulp_atom_kernel::shard::{load_shard, ShardRef, ShardSource};
+    use ulp_atom_kernel::shard::{load_shard_trusted, ShardRef, ShardSource};
 
     // Port 1 on localhost — immediate connection refused
     let shard = ShardRef {
         shard_id: "bad".into(),
         source: ShardSource::Http("http://127.0.0.1:1/shard.bin".into()),
         byte_size: None,
-        checksum: None,
+        checksum: Some("deadbeefdeadbeef".into()),
     };
-    let err = load_shard(&shard).unwrap_err();
+    let err = load_shard_trusted(&shard).unwrap_err();
     assert!(err.contains("shard http connect"), "error: {err}");
 }
 
@@ -2757,15 +2963,18 @@ fn mock_backend_load_shard_default_size() {
 
 #[test]
 fn vulkan_backend_load_shard_uses_real_path() {
+    use std::io::Write;
     use ulp_atom_kernel::backend::{Backend, VulkanBackend};
     use ulp_atom_kernel::shard::{ShardRef, ShardSource};
-    use std::io::Write;
 
     let dir = std::env::temp_dir().join("ulp_vk_shard_test");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("vk_shard.bin");
     let payload = b"VK_SHARD";
-    std::fs::File::create(&path).unwrap().write_all(payload).unwrap();
+    std::fs::File::create(&path)
+        .unwrap()
+        .write_all(payload)
+        .unwrap();
 
     let backend = VulkanBackend::new(0);
     let shard = ShardRef {
@@ -2783,15 +2992,18 @@ fn vulkan_backend_load_shard_uses_real_path() {
 
 #[test]
 fn http_backend_load_shard_uses_real_path() {
+    use std::io::Write;
     use ulp_atom_kernel::backend::{Backend, HttpBackend};
     use ulp_atom_kernel::shard::{ShardRef, ShardSource};
-    use std::io::Write;
 
     let dir = std::env::temp_dir().join("ulp_http_shard_test");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("http_shard.bin");
     let payload = b"HTTP_SHARD";
-    std::fs::File::create(&path).unwrap().write_all(payload).unwrap();
+    std::fs::File::create(&path)
+        .unwrap()
+        .write_all(payload)
+        .unwrap();
 
     let backend = HttpBackend::new("http://unused".into());
     let shard = ShardRef {
@@ -2931,7 +3143,6 @@ fn cuda_capabilities_reflect_selected_device() {
     }
 }
 
-
 // --- Shard manifest tests ---
 
 #[test]
@@ -2993,7 +3204,11 @@ fn shard_source_objectstore_parses() {
     }"#;
     let shard: ShardRef = serde_json::from_str(json).unwrap();
     match shard.source {
-        ShardSource::ObjectStore { endpoint, bucket, key } => {
+        ShardSource::ObjectStore {
+            endpoint,
+            bucket,
+            key,
+        } => {
             assert_eq!(endpoint, "http://s3.example.com");
             assert_eq!(bucket, "models");
             assert_eq!(key, "shard.bin");
@@ -3018,26 +3233,35 @@ fn shard_load_objectstore_constructs_url() {
     };
     // Will fail to connect — error should show constructed URL
     let err = load_shard(&shard).unwrap_err();
-    assert!(err.contains("invalid-host-9999") || err.contains("shard"), "error: {err}");
+    assert!(
+        err.contains("invalid-host-9999") || err.contains("shard"),
+        "error: {err}"
+    );
 }
 
 #[test]
 fn shard_checksum_verification_success() {
-    use ulp_atom_kernel::shard::{load_shard, ShardRef, ShardSource};
     use std::io::Write;
+    use ulp_atom_kernel::shard::{load_shard, ShardRef, ShardSource};
 
     let dir = std::env::temp_dir().join("ulp_checksum_test");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("data.bin");
     let payload = b"test data";
-    std::fs::File::create(&path).unwrap().write_all(payload).unwrap();
+    std::fs::File::create(&path)
+        .unwrap()
+        .write_all(payload)
+        .unwrap();
 
     // Compute expected checksum
-    let _expected = ulp_atom_kernel::shard::ShardManifest::from_json(&format!(r#"{{
+    let _expected = ulp_atom_kernel::shard::ShardManifest::from_json(&format!(
+        r#"{{
         "model_id": "test",
         "shards": []
-    }}"#)).unwrap();
-    
+    }}"#
+    ))
+    .unwrap();
+
     // Calculate checksum for test data using internal function
     // FNV-1a hash of "test data"
     let mut hash: u64 = 0xcbf29ce484222325;
@@ -3062,13 +3286,16 @@ fn shard_checksum_verification_success() {
 
 #[test]
 fn shard_checksum_verification_mismatch() {
-    use ulp_atom_kernel::shard::{load_shard, ShardRef, ShardSource};
     use std::io::Write;
+    use ulp_atom_kernel::shard::{load_shard, ShardRef, ShardSource};
 
     let dir = std::env::temp_dir().join("ulp_checksum_fail_test");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("data.bin");
-    std::fs::File::create(&path).unwrap().write_all(b"actual data").unwrap();
+    std::fs::File::create(&path)
+        .unwrap()
+        .write_all(b"actual data")
+        .unwrap();
 
     let shard = ShardRef {
         shard_id: "bad-ck".into(),
@@ -3086,11 +3313,11 @@ fn shard_checksum_verification_mismatch() {
 
 #[test]
 fn shard_http_rejects_non_200_status() {
-    use ulp_atom_kernel::shard::{load_shard, ShardRef, ShardSource};
     use std::io::Write;
     use std::net::TcpListener;
     use std::thread;
     use std::time::Duration;
+    use ulp_atom_kernel::shard::{load_shard_trusted, ShardRef, ShardSource};
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -3112,22 +3339,28 @@ fn shard_http_rejects_non_200_status() {
         shard_id: "test-404".into(),
         source: ShardSource::Http(url.clone()),
         byte_size: None,
-        checksum: None,
+        checksum: Some("deadbeefdeadbeef".into()),
     };
 
-    let err = load_shard(&shard).unwrap_err();
-    assert!(err.contains("HTTP 404"), "expected HTTP 404 error, got: {err}");
+    let err = load_shard_trusted(&shard).unwrap_err();
+    assert!(
+        err.contains("HTTP 404"),
+        "expected HTTP 404 error, got: {err}"
+    );
 }
 
 #[test]
 fn shard_byte_size_mismatch_detected() {
-    use ulp_atom_kernel::shard::{load_shard, ShardRef, ShardSource};
     use std::io::Write;
+    use ulp_atom_kernel::shard::{load_shard, ShardRef, ShardSource};
 
     let dir = std::env::temp_dir().join("ulp_size_mismatch_test");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("data.bin");
-    std::fs::File::create(&path).unwrap().write_all(b"1234567890").unwrap();
+    std::fs::File::create(&path)
+        .unwrap()
+        .write_all(b"1234567890")
+        .unwrap();
 
     let shard = ShardRef {
         shard_id: "size-test".into(),
@@ -3146,15 +3379,16 @@ fn shard_byte_size_mismatch_detected() {
 
 #[test]
 fn shard_manifest_base_url_works() {
-    use ulp_atom_kernel::shard::{load_shard_from_manifest, ShardManifest, ShardRef, ShardSource};
     use std::io::Write;
     use std::net::TcpListener;
     use std::thread;
     use std::time::Duration;
+    use ulp_atom_kernel::shard::{
+        load_shard_from_manifest_trusted, ShardManifest, ShardRef, ShardSource,
+    };
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
-    // Use localhost hostname so SSRF validation in load_shard_from_manifest passes
     let base_url = format!("http://127.0.0.1:{}", addr.port());
 
     thread::spawn(move || {
@@ -3183,7 +3417,7 @@ fn shard_manifest_base_url_works() {
         checksum: Some("4742a4bfe7666c69".into()), // FNV-1a of b"OKAY"
     };
 
-    let loaded = load_shard_from_manifest(&shard, &manifest).unwrap();
+    let loaded = load_shard_from_manifest_trusted(&shard, &manifest).unwrap();
     assert_eq!(loaded.data, b"OKAY");
 }
 
@@ -3206,7 +3440,10 @@ fn runner_uses_real_backend_not_mock() {
     assert!(backend_kind.is_some(), "backend_kind should be present");
 
     let kind = backend_kind.unwrap();
-    assert!(kind == "Vulkan" || kind == "Mock", "unexpected backend: {kind}");
+    assert!(
+        kind == "Vulkan" || kind == "Mock",
+        "unexpected backend: {kind}"
+    );
 }
 
 // ===========================================================================
@@ -3286,7 +3523,9 @@ fn home_node_generates_outsource_request() {
     };
     let candidates = vec![make_ephemeral_candidate("eph-1", "us-east")];
 
-    let (request, blinded) = home.prepare_outsource(&atom, vec![0x01, 0x02], &candidates).unwrap();
+    let (request, blinded) = home
+        .prepare_outsource(&atom, vec![0x01, 0x02], &candidates)
+        .unwrap();
 
     // HomeExecutionRequest stays on home side
     assert_eq!(request.home_node_id, "home-1");
@@ -3313,12 +3552,20 @@ fn blinded_atom_strips_sovereignty_metadata() {
     };
     let candidates = vec![make_ephemeral_candidate("eph-2", "us-east")];
 
-    let (_request, blinded) = home.prepare_outsource(&atom, vec![0xFF], &candidates).unwrap();
+    let (_request, blinded) = home
+        .prepare_outsource(&atom, vec![0xFF], &candidates)
+        .unwrap();
 
     // Serialize blinded atom and verify no sovereignty info leaks
     let json = serde_json::to_string(&blinded).unwrap();
-    assert!(!json.contains("secret-zone"), "sovereignty zone must not appear in blinded atom");
-    assert!(!json.contains("home-1"), "home node id must not appear in blinded atom");
+    assert!(
+        !json.contains("secret-zone"),
+        "sovereignty zone must not appear in blinded atom"
+    );
+    assert!(
+        !json.contains("home-1"),
+        "home node id must not appear in blinded atom"
+    );
 }
 
 #[test]
@@ -3327,11 +3574,7 @@ fn ephemeral_executes_blinded_atom_and_returns_result() {
     use ulp_atom_kernel::backend::MockBackend;
     use ulp_atom_kernel::sovereignty::{BlindedAtom, EphemeralNode};
 
-    let eph = EphemeralNode::new(
-        "eph-1",
-        Region("us-east".into()),
-        vec![AtomKind::Inference],
-    );
+    let eph = EphemeralNode::new("eph-1", Region("us-east".into()), vec![AtomKind::Inference]);
     let blinded = BlindedAtom {
         atom_id: "atom-1".into(),
         kind: AtomKind::Inference,
@@ -3395,6 +3638,7 @@ fn home_receives_result_and_absorbs_kv() {
             byte_size: 128,
             payload: vec![0xBB; 128],
         }],
+        nonce: None,
     };
 
     let response = home.receive_result(&request, eph_result);
@@ -3425,14 +3669,12 @@ fn full_home_ephemeral_roundtrip() {
     };
     let candidates = vec![make_ephemeral_candidate("eph-1", "us-east")];
 
-    let (request, blinded) = home.prepare_outsource(&atom, vec![0x68, 0x69], &candidates).unwrap();
+    let (request, blinded) = home
+        .prepare_outsource(&atom, vec![0x68, 0x69], &candidates)
+        .unwrap();
 
     // 2. Ephemeral node executes
-    let eph = EphemeralNode::new(
-        "eph-1",
-        Region("us-east".into()),
-        vec![AtomKind::Inference],
-    );
+    let eph = EphemeralNode::new("eph-1", Region("us-east".into()), vec![AtomKind::Inference]);
     let eph_result = eph.execute(&MockBackend, &blinded).unwrap();
 
     // 3. Home node receives result
@@ -3487,7 +3729,9 @@ fn home_local_execution_absorbs_kv() {
     };
     let candidates = vec![make_ephemeral_candidate("home-1", "us-east")];
 
-    let response = home.execute_local(&MockBackend, &atom, vec![0x61], &candidates).unwrap();
+    let response = home
+        .execute_local(&MockBackend, &atom, vec![0x61], &candidates)
+        .unwrap();
 
     // Local execution works through existing kernel::dispatch
     assert!(!response.exec_response.output.is_empty());
@@ -3613,10 +3857,17 @@ fn prib_mask_never_in_blinded_atom() {
 
     // Blinded atom serialization must not contain the mask bytes
     let blinded_json = serde_json::to_string(&blinded).unwrap();
-    let mask_hex: String = request.prib_mask.iter().map(|b| format!("{:02x}", b)).collect();
+    let mask_hex: String = request
+        .prib_mask
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect();
     // The mask is not directly embedded in the blinded atom struct
     // (it lives only in HomeExecutionRequest)
-    assert!(!blinded_json.contains("prib_mask"), "mask field must not appear in BlindedAtom");
+    assert!(
+        !blinded_json.contains("prib_mask"),
+        "mask field must not appear in BlindedAtom"
+    );
     let _ = mask_hex; // mask stays on home side
 }
 
@@ -3647,16 +3898,25 @@ fn prib_full_roundtrip_with_zero_mask() {
 
     // MockBackend uppercases: "abc" -> "ABC"
     let real_output = unblind(&eph_result.output, &mask);
-    assert_eq!(real_output, vec![0x41, 0x42, 0x43], "zero mask: unblind recovers uppercase");
+    assert_eq!(
+        real_output,
+        vec![0x41, 0x42, 0x43],
+        "zero mask: unblind recovers uppercase"
+    );
 }
 
 // ===========================================================================
 // Two-stage sovereignty: Prefill → Decode through Home/Ephemeral boundary
 // ===========================================================================
 
-fn make_candidates_two(prefill_id: &str, decode_id: &str, region: &str)
-    -> (Vec<ulp_atom_kernel::router::NodeProfile>, Vec<ulp_atom_kernel::router::NodeProfile>)
-{
+fn make_candidates_two(
+    prefill_id: &str,
+    decode_id: &str,
+    region: &str,
+) -> (
+    Vec<ulp_atom_kernel::router::NodeProfile>,
+    Vec<ulp_atom_kernel::router::NodeProfile>,
+) {
     let p = make_ephemeral_candidate(prefill_id, region);
     let d = make_ephemeral_candidate(decode_id, region);
     (vec![p], vec![d])
@@ -3776,7 +4036,10 @@ fn two_stage_outsourced_blind_unblind_only_on_home() {
         .unwrap();
 
     // Ephemeral does NOT see raw input
-    assert_ne!(prefill_blinded.input, raw_input, "prefill ephemeral must not see raw input");
+    assert_ne!(
+        prefill_blinded.input, raw_input,
+        "prefill ephemeral must not see raw input"
+    );
 
     // Only home can unblind
     let eph = EphemeralNode::new("eph-p", Region("us-east".into()), vec![AtomKind::Prefill]);
@@ -3845,6 +4108,7 @@ fn discovery_pool_register_and_query() {
         supported_kinds: vec![AtomKind::Prefill, AtomKind::Inference],
         capacity_hint: 4,
         expires_in_ms: 5000,
+        endpoint: None,
     });
     pool.register(SlotOffer {
         node_id: "eph-2".into(),
@@ -3852,6 +4116,7 @@ fn discovery_pool_register_and_query() {
         supported_kinds: vec![AtomKind::Decode],
         capacity_hint: 2,
         expires_in_ms: 5000,
+        endpoint: None,
     });
 
     assert_eq!(pool.len(), 2);
@@ -3884,6 +4149,7 @@ fn discovery_pool_deregister() {
         supported_kinds: vec![AtomKind::Inference],
         capacity_hint: 1,
         expires_in_ms: 1000,
+        endpoint: None,
     });
     assert_eq!(pool.len(), 1);
     pool.deregister("eph-x");
@@ -3952,6 +4218,7 @@ fn claim_slot_succeeds_on_first_candidate() {
         supported_kinds: vec![AtomKind::Inference],
         capacity_hint: 4,
         expires_in_ms: 5000,
+        endpoint: None,
     });
 
     // Simulate: always echo the nonce back correctly
@@ -3976,7 +4243,9 @@ fn claim_slot_succeeds_on_first_candidate() {
 #[test]
 fn claim_slot_retries_on_nonce_mismatch() {
     use ulp_atom_kernel::atom::{AtomKind, Region};
-    use ulp_atom_kernel::runtime::{claim_slot, DiscoveryPool, Nonce, SlotClaimResponse, SlotOffer};
+    use ulp_atom_kernel::runtime::{
+        claim_slot, DiscoveryPool, Nonce, SlotClaimResponse, SlotOffer,
+    };
 
     let mut pool = DiscoveryPool::new();
     pool.register(SlotOffer {
@@ -3985,6 +4254,7 @@ fn claim_slot_retries_on_nonce_mismatch() {
         supported_kinds: vec![AtomKind::Inference],
         capacity_hint: 1,
         expires_in_ms: 5000,
+        endpoint: None,
     });
     pool.register(SlotOffer {
         node_id: "eph-good".into(),
@@ -3992,6 +4262,7 @@ fn claim_slot_retries_on_nonce_mismatch() {
         supported_kinds: vec![AtomKind::Inference],
         capacity_hint: 2,
         expires_in_ms: 5000,
+        endpoint: None,
     });
 
     // First candidate returns wrong nonce, second echoes correctly
@@ -4036,6 +4307,7 @@ fn claim_slot_fails_when_all_candidates_reject() {
         supported_kinds: vec![AtomKind::Decode],
         capacity_hint: 0,
         expires_in_ms: 1000,
+        endpoint: None,
     });
 
     let err = claim_slot(
@@ -4119,6 +4391,7 @@ fn discovery_pool_replaces_existing_offer() {
         supported_kinds: vec![AtomKind::Prefill],
         capacity_hint: 1,
         expires_in_ms: 1000,
+        endpoint: None,
     });
     // Re-register same node with updated capacity
     pool.register(SlotOffer {
@@ -4127,6 +4400,7 @@ fn discovery_pool_replaces_existing_offer() {
         supported_kinds: vec![AtomKind::Prefill],
         capacity_hint: 8,
         expires_in_ms: 5000,
+        endpoint: None,
     });
     assert_eq!(pool.len(), 1, "should not duplicate same node_id");
     let cands = pool.candidates_for(&AtomKind::Prefill, None);

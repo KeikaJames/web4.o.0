@@ -1,5 +1,14 @@
 use crate::kernel::{AtomRequest, AtomResponse};
+use crate::runtime::{SlotClaim, SlotClaimResponse};
+use crate::sovereignty::{BlindedAtomRequest, BlindedAtomResponse, RemoteExecutionError};
+use std::net::ToSocketAddrs;
 use std::time::Duration;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EndpointTrust {
+    Enforce,
+    Trusted,
+}
 
 /// Validate that a URL is safe to connect to.
 ///
@@ -10,47 +19,51 @@ use std::time::Duration;
 /// - Link-local (169.254.x / fe80::)
 /// - AWS/GCP/Azure metadata service addresses
 pub fn validate_endpoint_url(url: &str) -> Result<(), String> {
-    if !url.starts_with("http://") && !url.starts_with("https://") {
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|e| format!("endpoint URL parse failed for '{}': {}", url, e))?;
+
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
         return Err(format!(
             "endpoint URL must use http:// or https://, got: '{}'",
             url
         ));
     }
 
-    let without_scheme = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .unwrap_or(url);
-
-    let host_port = match without_scheme.find('/') {
-        Some(i) => &without_scheme[..i],
-        None => without_scheme,
-    };
-    let host = if host_port.starts_with('[') {
-        match host_port.find(']') {
-            Some(i) => &host_port[1..i],
-            None => host_port,
-        }
-    } else if let Some(colon) = host_port.rfind(':') {
-        &host_port[..colon]
-    } else {
-        host_port
-    };
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| format!("endpoint URL is missing a host: '{}'", url))?
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
 
     const BLOCKED_HOSTS: &[&str] = &[
+        "localhost",
         "169.254.169.254",
         "metadata.google.internal",
         "metadata.goog",
     ];
-    if BLOCKED_HOSTS.contains(&host) {
+    if BLOCKED_HOSTS.contains(&host.as_str()) {
         return Err(format!("endpoint URL targets a blocked host: '{}'", host));
     }
 
-    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-        if is_blocked_ip(&ip) {
+    let port = parsed
+        .port_or_known_default()
+        .ok_or_else(|| format!("endpoint URL is missing a usable port: '{}'", url))?;
+    let resolved: Vec<_> = (host.as_str(), port)
+        .to_socket_addrs()
+        .map_err(|e| format!("endpoint URL host resolution failed for '{}': {}", host, e))?
+        .collect();
+    if resolved.is_empty() {
+        return Err(format!(
+            "endpoint URL host resolution returned no addresses for '{}'",
+            host
+        ));
+    }
+
+    for addr in resolved {
+        if is_blocked_ip(&addr.ip()) {
             return Err(format!(
                 "endpoint URL targets a blocked IP range: '{}'",
-                ip
+                addr.ip()
             ));
         }
     }
@@ -71,29 +84,50 @@ fn is_blocked_ip(ip: &std::net::IpAddr) -> bool {
                 || v4.is_unspecified()
         }
         IpAddr::V6(v6) => {
-            v6.is_loopback()
-                || (v6.segments()[0] & 0xffc0 == 0xfe80)
-                || v6.is_unspecified()
+            v6.is_loopback() || (v6.segments()[0] & 0xffc0 == 0xfe80) || v6.is_unspecified()
         }
     }
 }
 
 pub struct RemoteClient {
-    client: reqwest::Client,
+    pub(crate) client: reqwest::Client,
+    endpoint_trust: EndpointTrust,
 }
 
 impl RemoteClient {
     pub fn new() -> Self {
+        Self::with_trust(EndpointTrust::Enforce)
+    }
+
+    /// Explicitly allow private / loopback endpoints.
+    ///
+    /// This is intended only for tests and trusted local development flows.
+    pub fn new_trusted() -> Self {
+        Self::with_trust(EndpointTrust::Trusted)
+    }
+
+    fn with_trust(endpoint_trust: EndpointTrust) -> Self {
         Self {
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(30))
                 .build()
                 .expect("failed to build http client"),
+            endpoint_trust,
         }
     }
 
+    fn validate_if_required(&self, url: &str) -> Result<(), String> {
+        if self.endpoint_trust == EndpointTrust::Enforce {
+            validate_endpoint_url(url)?;
+        }
+        Ok(())
+    }
+
     pub async fn dispatch(&self, url: &str, request: AtomRequest) -> Result<AtomResponse, String> {
-        let response = self.client
+        self.validate_if_required(url)?;
+
+        let response = self
+            .client
             .post(url)
             .json(&request)
             .send()
@@ -111,6 +145,73 @@ impl RemoteClient {
             .await
             .map_err(|e| format!("parse response: {e}"))
     }
+
+    pub async fn claim_slot(
+        &self,
+        url: &str,
+        claim: &SlotClaim,
+    ) -> Result<SlotClaimResponse, String> {
+        self.validate_if_required(url)?;
+
+        let response = self
+            .client
+            .post(url)
+            .timeout(Duration::from_millis(claim.timeout_ms.max(1)))
+            .json(claim)
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    format!("slot claim timeout: {e}")
+                } else {
+                    format!("slot claim send: {e}")
+                }
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("slot claim server error {status}: {body}"));
+        }
+
+        response
+            .json::<SlotClaimResponse>()
+            .await
+            .map_err(|e| format!("slot claim parse response: {e}"))
+    }
+
+    pub async fn execute_blinded(
+        &self,
+        url: &str,
+        request: &BlindedAtomRequest,
+        timeout_ms: u64,
+    ) -> Result<BlindedAtomResponse, String> {
+        self.validate_if_required(url)?;
+
+        let response = self
+            .client
+            .post(url)
+            .timeout(Duration::from_millis(timeout_ms.max(1)))
+            .json(request)
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    format!("blinded execute timeout: {e}")
+                } else {
+                    format!("blinded execute send: {e}")
+                }
+            })?;
+
+        if !response.status().is_success() {
+            return Err(parse_remote_execute_error(response).await);
+        }
+
+        response
+            .json::<BlindedAtomResponse>()
+            .await
+            .map_err(|e| format!("blinded execute parse response: {e}"))
+    }
 }
 
 impl Default for RemoteClient {
@@ -121,4 +222,24 @@ impl Default for RemoteClient {
 
 pub async fn dispatch_remote(url: &str, request: AtomRequest) -> Result<AtomResponse, String> {
     RemoteClient::new().dispatch(url, request).await
+}
+
+pub async fn dispatch_remote_trusted(
+    url: &str,
+    request: AtomRequest,
+) -> Result<AtomResponse, String> {
+    RemoteClient::new_trusted().dispatch(url, request).await
+}
+
+async fn parse_remote_execute_error(response: reqwest::Response) -> String {
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if let Ok(err) = serde_json::from_str::<RemoteExecutionError>(&body) {
+        format!(
+            "blinded execute server error {status}: {} ({})",
+            err.message, err.code
+        )
+    } else {
+        format!("blinded execute server error {status}: {body}")
+    }
 }
