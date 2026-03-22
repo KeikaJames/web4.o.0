@@ -50,6 +50,8 @@ pub struct AtomRequest {
     pub input: Vec<u8>,
     pub kv_state: Vec<KVChunk>,
     pub candidates: Vec<NodeProfile>,
+    #[serde(default)]
+    pub adapter_context: Option<crate::adapter::AdapterContext>,
 }
 
 /// What the kernel returns.

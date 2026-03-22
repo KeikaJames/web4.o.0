@@ -57,6 +57,7 @@ pub async fn dispatch_federation(
         input,
         kv_state,
         candidates: vec![chosen.profile.clone()],
+        adapter_context: None,
     };
 
     client.dispatch(&chosen.endpoint, request).await

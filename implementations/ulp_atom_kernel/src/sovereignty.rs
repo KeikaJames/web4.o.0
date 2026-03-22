@@ -314,6 +314,7 @@ impl HomeNode {
             input,
             kv_state: self.kv_store.clone(),
             candidates: candidates.to_vec(),
+            adapter_context: None,
         };
         let response = kernel::dispatch(backend, request)?;
         self.kv_store = response.exec_response.kv_state.clone();
@@ -927,6 +928,9 @@ pub struct KVHandoffMetadata {
     /// Reserved for future KV migration proof.
     #[serde(default)]
     pub migration_hint: Option<String>,
+    /// Adapter generation for lineage tracking.
+    #[serde(default)]
+    pub adapter_generation: Option<u64>,
 }
 
 impl KVHandoffMetadata {
@@ -940,6 +944,7 @@ impl KVHandoffMetadata {
             total_bytes,
             ownership_hint: None,
             migration_hint: None,
+            adapter_generation: None,
         }
     }
 
@@ -959,6 +964,7 @@ impl KVHandoffMetadata {
             total_bytes,
             ownership_hint: Some(owner_node_id),
             migration_hint,
+            adapter_generation: None,
         }
     }
 }
@@ -971,6 +977,7 @@ impl Default for KVHandoffMetadata {
             total_bytes: 0,
             ownership_hint: None,
             migration_hint: None,
+            adapter_generation: None,
         }
     }
 }

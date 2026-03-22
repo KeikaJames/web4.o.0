@@ -502,3 +502,28 @@ class SACContainer:
         )
         sac.validate()
         return sac
+
+    def init_chronara(self):
+        """Initialize Chronara context for adapter evolution."""
+        from implementations.sac_py.chronara_nexus import Collector, Governor, AdapterRef, AdapterMode
+        initial_adapter = AdapterRef("default", 1, AdapterMode.SERVE)
+        self._chronara_collector = Collector(initial_adapter)
+        self._chronara_governor = Governor(initial_adapter)
+
+    def record_observation(self, observation: dict):
+        """Record observation through Chronara admission gate."""
+        if not hasattr(self, '_chronara_collector'):
+            self.init_chronara()
+        return self._chronara_collector.admit_observation(observation)
+
+    def current_adapter_ref(self):
+        """Get current active adapter reference."""
+        if not hasattr(self, '_chronara_collector'):
+            self.init_chronara()
+        return self._chronara_collector.get_active_adapter()
+
+    def promote_candidate_if_valid(self, candidate):
+        """Promote candidate adapter if validation passes."""
+        if not hasattr(self, '_chronara_governor'):
+            self.init_chronara()
+        return self._chronara_governor.promote_candidate(candidate)

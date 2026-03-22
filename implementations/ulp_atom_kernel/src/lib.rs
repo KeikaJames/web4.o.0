@@ -18,3 +18,4 @@ pub mod backend;
 pub mod prib;
 pub mod runtime;
 pub mod sovereignty;
+pub mod adapter;

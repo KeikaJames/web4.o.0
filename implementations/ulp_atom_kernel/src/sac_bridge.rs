@@ -38,5 +38,6 @@ pub fn into_atom_request(
         input: sac_req.input.clone(),
         kv_state,
         candidates,
+        adapter_context: None,
     }
 }
