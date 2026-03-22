@@ -224,6 +224,7 @@ impl HomeNode {
                     prefill_eph_result.kv_produced.len(),
                     prefill_eph_result.kv_produced.iter().map(|c| c.byte_size).sum(),
                 ),
+                handoff_id: Some(format!("{}:prefill", prefill_atom.id)),
             },
             kv_handoff: KVHandoff {
                 source_stage: "prefill".to_string(),
@@ -474,8 +475,8 @@ impl HomeNode {
         // Verify handoff before decode
         prefill_receipt.kv_handoff.verify("prefill")?;
 
-        // Verify stage receipt
-        prefill_receipt.stage_receipt.verify("prefill", &prefill_receipt.stage_receipt.nonce)?;
+        // Verify stage receipt with handoff consistency
+        prefill_receipt.stage_receipt.verify_with_handoff("prefill", &prefill_receipt.stage_receipt.nonce, &prefill_receipt.kv_handoff)?;
 
         // Verify provenance chain: handoff ownership matches stage receipt owner
         if let Some(ref owner) = prefill_receipt.kv_handoff.metadata.ownership_hint {
@@ -485,6 +486,11 @@ impl HomeNode {
                     owner, prefill_receipt.stage_receipt.owner_node_id
                 ));
             }
+        }
+
+        // Verify decode input chain: must come from prefill output
+        if prefill_receipt.prefill_output.is_empty() {
+            return Err("decode input chain broken: prefill output is empty".to_string());
         }
 
         let decode_stage = self
@@ -662,6 +668,7 @@ impl HomeNode {
                                 kv_produced.len(),
                                 kv_produced.iter().map(|c| c.byte_size).sum(),
                             ),
+                            handoff_id: handoff_id.map(|s| s.to_string()),
                         },
                     });
                 }
@@ -1018,6 +1025,9 @@ pub struct StageReceipt {
     pub output_size: usize,
     /// KV summary: chunk count and total bytes.
     pub kv_summary: (usize, usize),
+    /// Associated handoff ID for KV location tracking.
+    #[serde(default)]
+    pub handoff_id: Option<String>,
 }
 
 impl StageReceipt {
@@ -1035,6 +1045,29 @@ impl StageReceipt {
                 expected_nonce.0, self.nonce.0
             ));
         }
+        Ok(())
+    }
+
+    /// Verify receipt with handoff consistency.
+    pub fn verify_with_handoff(&self, expected_kind: &str, expected_nonce: &Nonce, handoff: &KVHandoff) -> Result<(), String> {
+        self.verify(expected_kind, expected_nonce)?;
+
+        if let Some(ref receipt_handoff_id) = self.handoff_id {
+            if receipt_handoff_id != &handoff.metadata.handoff_id {
+                return Err(format!(
+                    "handoff ID mismatch: receipt '{}' != handoff '{}'",
+                    receipt_handoff_id, handoff.metadata.handoff_id
+                ));
+            }
+        }
+
+        if self.kv_summary != (handoff.metadata.chunk_count, handoff.metadata.total_bytes) {
+            return Err(format!(
+                "KV summary mismatch: receipt {:?} != handoff ({}, {})",
+                self.kv_summary, handoff.metadata.chunk_count, handoff.metadata.total_bytes
+            ));
+        }
+
         Ok(())
     }
 }
