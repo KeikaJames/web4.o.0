@@ -246,6 +246,16 @@ impl HomeNode {
         // Verify stage receipt
         prefill_receipt.stage_receipt.verify("prefill", &Nonce::new(0))?;
 
+        // Verify provenance chain: handoff ownership matches stage receipt owner
+        if let Some(ref owner) = prefill_receipt.kv_handoff.metadata.ownership_hint {
+            if owner != &prefill_receipt.stage_receipt.owner_node_id {
+                return Err(format!(
+                    "provenance chain broken: handoff owner '{}' != stage owner '{}'",
+                    owner, prefill_receipt.stage_receipt.owner_node_id
+                ));
+            }
+        }
+
         // Decode input is the real prefill output
         let (decode_request, mut decode_blinded) =
             self.prepare_outsource_blinded(decode_atom, prefill_real_output, decode_candidates)?;
@@ -436,6 +446,16 @@ impl HomeNode {
 
         // Verify stage receipt
         prefill_receipt.stage_receipt.verify("prefill", &prefill_receipt.stage_receipt.nonce)?;
+
+        // Verify provenance chain: handoff ownership matches stage receipt owner
+        if let Some(ref owner) = prefill_receipt.kv_handoff.metadata.ownership_hint {
+            if owner != &prefill_receipt.stage_receipt.owner_node_id {
+                return Err(format!(
+                    "provenance chain broken: handoff owner '{}' != stage owner '{}'",
+                    owner, prefill_receipt.stage_receipt.owner_node_id
+                ));
+            }
+        }
 
         let decode_stage = self
             .execute_remote_stage(
