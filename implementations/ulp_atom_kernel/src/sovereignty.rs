@@ -32,6 +32,8 @@ pub struct HomeNode {
     pub kv_store: Vec<KVChunk>,
     /// Shards currently loaded locally.
     pub hot_shards: Vec<LoadedShard>,
+    /// KV location index for mesh-ready semantics.
+    pub kv_locations: Vec<KVLocation>,
 }
 
 impl HomeNode {
@@ -42,6 +44,7 @@ impl HomeNode {
             region,
             kv_store: Vec::new(),
             hot_shards: Vec::new(),
+            kv_locations: Vec::new(),
         }
     }
 
@@ -319,6 +322,18 @@ impl HomeNode {
             }
         }
         chunks.len()
+    }
+
+    fn register_kv_location(&mut self, location: KVLocation) {
+        if let Some(pos) = self
+            .kv_locations
+            .iter()
+            .position(|l| l.handoff_id == location.handoff_id)
+        {
+            self.kv_locations[pos] = location;
+        } else {
+            self.kv_locations.push(location);
+        }
     }
 
     fn finish_result(
@@ -894,6 +909,26 @@ impl Default for KVHandoffMetadata {
             migration_hint: None,
         }
     }
+}
+
+/// Minimal KV location descriptor for mesh-ready semantics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KVLocation {
+    /// Associated handoff ID.
+    pub handoff_id: String,
+    /// Storage scope: home-local, remote-available, or migrated.
+    pub scope: KVStorageScope,
+    /// Node/location reference.
+    pub node_id: String,
+    /// Retrieval hint for remote access.
+    pub retrieval_hint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum KVStorageScope {
+    HomeLocal,
+    RemoteAvailable,
+    Migrated,
 }
 
 /// Minimal stage execution receipt for verification.
