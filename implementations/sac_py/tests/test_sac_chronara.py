@@ -27,5 +27,16 @@ def test_sac_promote_candidate():
     sac.init_chronara()
 
     candidate = AdapterRef("default", 2, AdapterMode.SERVE)
+    report = sac.validate_from_atom_result(
+        candidate,
+        {
+            "exec_response": {
+                "adapter_id": "default",
+                "adapter_generation": 2,
+            }
+        },
+    )
+    assert report.passed
     promoted = sac.promote_candidate_if_valid(candidate)
     assert promoted
+    assert sac.current_adapter_ref().generation == 2

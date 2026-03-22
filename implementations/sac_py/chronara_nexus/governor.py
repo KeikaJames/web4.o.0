@@ -11,9 +11,11 @@ class Governor:
         self.active_adapter = initial_adapter
         self.candidate_adapter: Optional[AdapterRef] = None
         self.stable_adapter = initial_adapter
+        self.last_validation_report: Optional[ValidationReport] = None
 
     def create_shadow_request(self, candidate: AdapterRef, input_data: bytes) -> Dict[str, Any]:
         """Create a shadow eval request for candidate adapter."""
+        self.candidate_adapter = candidate
         return {
             "active_adapter": {
                 "adapter_id": self.active_adapter.adapter_id,
@@ -30,6 +32,7 @@ class Governor:
 
     def validate_from_lineage(self, candidate: AdapterRef, atom_result: Dict[str, Any]) -> ValidationReport:
         """Validate candidate using atom execution lineage."""
+        self.candidate_adapter = candidate
         exec_response = atom_result.get("exec_response", {})
         adapter_id = exec_response.get("adapter_id")
         adapter_generation = exec_response.get("adapter_generation")
@@ -42,7 +45,7 @@ class Governor:
 
         passed = lineage_match and candidate.generation > self.active_adapter.generation
 
-        return ValidationReport(
+        report = ValidationReport(
             adapter_id=candidate.adapter_id,
             generation=candidate.generation,
             passed=passed,
@@ -52,22 +55,30 @@ class Governor:
             },
             reason=None if passed else "lineage mismatch or generation not advanced"
         )
+        self.last_validation_report = report
+        return report
 
     def validate_from_comparison(self, candidate: AdapterRef, comparison_result: Dict[str, Any]) -> ValidationReport:
         """Validate candidate using shadow comparison result."""
+        self.candidate_adapter = candidate
         lineage_valid = comparison_result.get("lineage_valid", False)
         output_match = comparison_result.get("output_match", False)
         kv_count_match = comparison_result.get("kv_count_match", False)
-        is_acceptable = comparison_result.get("is_acceptable", False)
+        generation_advanced = candidate.generation > self.active_adapter.generation
+        if "is_acceptable" in comparison_result:
+            is_acceptable = comparison_result["is_acceptable"]
+        else:
+            is_acceptable = lineage_valid and kv_count_match
 
         # Strict: must have valid lineage and acceptable behavior
-        passed = lineage_valid and is_acceptable
+        passed = lineage_valid and is_acceptable and generation_advanced
 
         metric_summary = {
             "lineage_valid": lineage_valid,
             "output_match": output_match,
             "kv_count_match": kv_count_match,
             "is_acceptable": is_acceptable,
+            "generation_advanced": generation_advanced,
         }
 
         reason = None
@@ -76,14 +87,18 @@ class Governor:
                 reason = "adapter lineage invalid"
             elif not is_acceptable:
                 reason = "shadow behavior not acceptable"
+            elif not generation_advanced:
+                reason = "generation not advanced"
 
-        return ValidationReport(
+        report = ValidationReport(
             adapter_id=candidate.adapter_id,
             generation=candidate.generation,
             passed=passed,
             metric_summary=metric_summary,
             reason=reason
         )
+        self.last_validation_report = report
+        return report
 
     def validate_candidate(self, candidate: AdapterRef) -> ValidationReport:
         """Minimal validation logic."""
@@ -98,10 +113,16 @@ class Governor:
 
     def promote_candidate(self, candidate: AdapterRef) -> bool:
         """Promote candidate to active."""
-        report = self.validate_candidate(candidate)
+        report = self.last_validation_report
+        if report is None:
+            return False
         if not report.passed:
             return False
+        if report.adapter_id != candidate.adapter_id or report.generation != candidate.generation:
+            return False
         self.active_adapter = candidate
+        self.candidate_adapter = None
+        self.last_validation_report = None
         return True
 
     def rollback_to_stable(self):

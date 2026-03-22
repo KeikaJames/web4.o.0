@@ -13,6 +13,7 @@ pub struct ComparisonResult {
     pub tokens_match: bool,
     pub kv_count_match: bool,
     pub lineage_valid: bool,
+    pub is_acceptable: bool,
 }
 
 impl ComparisonResult {
@@ -31,6 +32,7 @@ impl ComparisonResult {
             (Some(a), Some(s)) => s > a,
             _ => false,
         };
+        let is_acceptable = lineage_valid && kv_count_match;
 
         ComparisonResult {
             active_response: active,
@@ -40,10 +42,11 @@ impl ComparisonResult {
             tokens_match,
             kv_count_match,
             lineage_valid,
+            is_acceptable,
         }
     }
 
     pub fn is_acceptable(&self) -> bool {
-        self.lineage_valid && self.kv_count_match
+        self.is_acceptable
     }
 }

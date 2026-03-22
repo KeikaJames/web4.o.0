@@ -39,6 +39,16 @@ def test_governor_promote_rollback():
     governor = Governor(initial)
 
     candidate = AdapterRef("adapter-1", 2, AdapterMode.SERVE)
+    report = governor.validate_from_lineage(
+        candidate,
+        {
+            "exec_response": {
+                "adapter_id": "adapter-1",
+                "adapter_generation": 2,
+            }
+        },
+    )
+    assert report.passed
     promoted = governor.promote_candidate(candidate)
     assert promoted
     assert governor.active_adapter.generation == 2

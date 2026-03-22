@@ -514,19 +514,27 @@ class SACContainer:
         """Record observation through Chronara admission gate."""
         if not hasattr(self, '_chronara_collector'):
             self.init_chronara()
+        if hasattr(self, '_chronara_governor'):
+            self._chronara_collector.set_active_adapter(self._chronara_governor.active_adapter)
         return self._chronara_collector.admit_observation(observation)
 
     def current_adapter_ref(self):
         """Get current active adapter reference."""
         if not hasattr(self, '_chronara_collector'):
             self.init_chronara()
+        if hasattr(self, '_chronara_governor'):
+            self._chronara_collector.set_active_adapter(self._chronara_governor.active_adapter)
+            return self._chronara_governor.active_adapter
         return self._chronara_collector.get_active_adapter()
 
     def promote_candidate_if_valid(self, candidate):
         """Promote candidate adapter if validation passes."""
         if not hasattr(self, '_chronara_governor'):
             self.init_chronara()
-        return self._chronara_governor.promote_candidate(candidate)
+        promoted = self._chronara_governor.promote_candidate(candidate)
+        if promoted and hasattr(self, '_chronara_collector'):
+            self._chronara_collector.set_active_adapter(self._chronara_governor.active_adapter)
+        return promoted
 
     def create_shadow_eval_request(self, candidate, input_data: bytes):
         """Create shadow eval request for candidate validation."""

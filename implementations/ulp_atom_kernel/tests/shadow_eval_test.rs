@@ -56,4 +56,5 @@ fn test_dispatch_shadow_dual_path() {
     assert_eq!(active_resp.exec_response.adapter_generation, Some(1));
     assert_eq!(comparison.shadow_response.adapter_generation, Some(2));
     assert!(comparison.lineage_valid);
+    assert!(comparison.is_acceptable);
 }

@@ -86,3 +86,24 @@ def test_sac_validate_from_comparison():
 
     report = sac.validate_from_comparison(candidate, comparison_result)
     assert report.passed
+
+
+def test_governor_validate_from_rust_shaped_comparison_result():
+    """Governor accepts comparison results that only contain serialized Rust fields."""
+    active = AdapterRef("base", 1, AdapterMode.SERVE)
+    candidate = AdapterRef("base", 2, AdapterMode.SHADOW_EVAL)
+
+    governor = Governor(active)
+
+    comparison_result = {
+        "lineage_valid": True,
+        "output_match": True,
+        "kv_count_match": True,
+        "tokens_match": True,
+        "output_diff_bytes": 0,
+    }
+
+    report = governor.validate_from_comparison(candidate, comparison_result)
+
+    assert report.passed
+    assert report.metric_summary["is_acceptable"]
