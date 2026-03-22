@@ -211,7 +211,11 @@ impl HomeNode {
             atom_id: prefill_atom.id.clone(),
             prefill_node_id: prefill_request.target_node_id.clone(),
             tokens_produced: prefill_eph_result.tokens_produced,
-            kv_produced: prefill_eph_result.kv_produced.clone(),
+            kv_handoff: KVHandoff {
+                source_stage: "prefill".to_string(),
+                chunks: prefill_eph_result.kv_produced.clone(),
+                metadata: KVHandoffMetadata::default(),
+            },
             prefill_output: prefill_real_output.clone(),
         };
 
@@ -222,7 +226,7 @@ impl HomeNode {
             self.prepare_outsource_blinded(decode_atom, prefill_real_output, decode_candidates)?;
 
         // Carry prefill KV into decode blinded atom
-        decode_blinded.kv_chunks = prefill_receipt.kv_produced.clone();
+        decode_blinded.kv_chunks = prefill_receipt.kv_handoff.chunks.clone();
 
         let kv_migrated = prefill_request.target_node_id != decode_request.target_node_id;
 
@@ -376,7 +380,11 @@ impl HomeNode {
             atom_id: prefill_atom.id.clone(),
             prefill_node_id: prefill_stage.node_id.clone(),
             tokens_produced: prefill_stage.tokens_produced,
-            kv_produced: prefill_stage.kv_produced.clone(),
+            kv_handoff: KVHandoff {
+                source_stage: "prefill".to_string(),
+                chunks: prefill_stage.kv_produced.clone(),
+                metadata: KVHandoffMetadata::default(),
+            },
             prefill_output: prefill_stage.output.clone(),
         };
 
@@ -385,7 +393,7 @@ impl HomeNode {
                 client,
                 decode_atom,
                 prefill_receipt.prefill_output.clone(),
-                prefill_receipt.kv_produced.clone(),
+                prefill_receipt.kv_handoff.chunks.clone(),
                 pool,
                 decode_nonce_seed,
                 timeout_ms,
@@ -718,6 +726,31 @@ pub struct HomeExecutionResponse {
 // Two-stage sovereignty objects
 // ---------------------------------------------------------------------------
 
+/// KV handoff object: explicit KV state transfer from Prefill to Decode.
+/// Held exclusively on the Home Node. Represents the KV-centric boundary
+/// between stages, with ownership and lifecycle metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KVHandoff {
+    /// Source stage that produced this KV state.
+    pub source_stage: String,
+    /// KV chunks being handed off to the next stage.
+    pub chunks: Vec<KVChunk>,
+    /// Minimal metadata for future verification hooks.
+    #[serde(default)]
+    pub metadata: KVHandoffMetadata,
+}
+
+/// Minimal metadata for KV handoff, reserved for future verification.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct KVHandoffMetadata {
+    /// Reserved for future KV ownership proof.
+    #[serde(default)]
+    pub ownership_hint: Option<String>,
+    /// Reserved for future KV migration proof.
+    #[serde(default)]
+    pub migration_hint: Option<String>,
+}
+
 /// Intermediate state produced after Prefill and passed into Decode.
 /// Held exclusively on the Home Node between stages.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -725,8 +758,8 @@ pub struct PrefillReceipt {
     pub atom_id: String,
     pub prefill_node_id: String,
     pub tokens_produced: u32,
-    /// KV chunks produced by Prefill — carried into Decode stage.
-    pub kv_produced: Vec<KVChunk>,
+    /// KV handoff: explicit KV-centric transfer to Decode stage.
+    pub kv_handoff: KVHandoff,
     /// Unblinded prefill output, stored on Home Node only.
     pub prefill_output: Vec<u8>,
 }
