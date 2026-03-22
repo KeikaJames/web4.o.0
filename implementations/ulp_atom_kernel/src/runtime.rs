@@ -197,6 +197,29 @@ impl DiscoveryPool {
             })
             .collect()
     }
+
+    /// Return candidates with federated hints considered.
+    /// Prioritizes candidates with kv_available for Decode, filters by capabilities.
+    pub fn candidates_with_hints(
+        &self,
+        kind: &AtomKind,
+        region: Option<&Region>,
+        prefer_kv: bool,
+    ) -> Vec<&SlotOffer> {
+        let mut candidates: Vec<&SlotOffer> = self
+            .offers
+            .iter()
+            .filter(|o| {
+                o.supported_kinds.contains(kind) && region.map_or(true, |r| o.region.0 == r.0)
+            })
+            .collect();
+
+        if prefer_kv {
+            candidates.sort_by_key(|o| if o.kv_available { 0 } else { 1 });
+        }
+
+        candidates
+    }
 }
 
 impl Default for DiscoveryPool {
@@ -308,7 +331,20 @@ pub async fn claim_slot_http(
     nonce_seed: u64,
     timeout_ms: u64,
 ) -> Result<ClaimedSlot, String> {
-    let candidates = pool.candidates_for(kind, region);
+    claim_slot_http_with_hints(client, pool, home_node_id, kind, region, nonce_seed, timeout_ms, false).await
+}
+
+pub async fn claim_slot_http_with_hints(
+    client: &RemoteClient,
+    pool: &DiscoveryPool,
+    home_node_id: &str,
+    kind: &AtomKind,
+    region: Option<&Region>,
+    nonce_seed: u64,
+    timeout_ms: u64,
+    prefer_kv: bool,
+) -> Result<ClaimedSlot, String> {
+    let candidates = pool.candidates_with_hints(kind, region, prefer_kv);
     if candidates.is_empty() {
         return Err("discovery pool: no candidates available".to_string());
     }

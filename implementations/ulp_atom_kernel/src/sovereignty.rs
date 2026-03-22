@@ -14,7 +14,7 @@ use crate::client::RemoteClient;
 use crate::kernel::{self, AtomRequest, AtomResponse};
 use crate::kv::KVChunk;
 use crate::router::{NodeProfile, PlacementDecision};
-use crate::runtime::{claim_slot_http, DiscoveryPool, Nonce};
+use crate::runtime::{DiscoveryPool, Nonce};
 use crate::shard::LoadedShard;
 
 // ---------------------------------------------------------------------------
@@ -533,12 +533,13 @@ impl HomeNode {
         timeout_ms: u64,
     ) -> Result<RemoteStageReceipt, String> {
         let stage = ExecutionStage::for_atom_kind(&atom.kind);
+        let prefer_kv = matches!(atom.kind, AtomKind::Decode);
         let mut remaining = pool.clone();
         let mut next_seed = nonce_seed;
         let mut last_err = String::new();
 
         while !remaining.is_empty() {
-            let claimed = match claim_slot_http(
+            let claimed = match crate::runtime::claim_slot_http_with_hints(
                 client,
                 &remaining,
                 &self.node_id,
@@ -546,6 +547,7 @@ impl HomeNode {
                 None,
                 next_seed,
                 timeout_ms,
+                prefer_kv,
             )
             .await
             {
