@@ -214,12 +214,18 @@ impl HomeNode {
             kv_handoff: KVHandoff {
                 source_stage: "prefill".to_string(),
                 chunks: prefill_eph_result.kv_produced.clone(),
-                metadata: KVHandoffMetadata::default(),
+                metadata: KVHandoffMetadata::from_chunks(
+                    format!("{}:prefill", prefill_atom.id),
+                    &prefill_eph_result.kv_produced,
+                ),
             },
             prefill_output: prefill_real_output.clone(),
         };
 
         // --- Stage 2: Decode ---
+
+        // Verify handoff before decode
+        prefill_receipt.kv_handoff.verify("prefill")?;
 
         // Decode input is the real prefill output
         let (decode_request, mut decode_blinded) =
@@ -383,10 +389,16 @@ impl HomeNode {
             kv_handoff: KVHandoff {
                 source_stage: "prefill".to_string(),
                 chunks: prefill_stage.kv_produced.clone(),
-                metadata: KVHandoffMetadata::default(),
+                metadata: KVHandoffMetadata::from_chunks(
+                    format!("{}:prefill", prefill_atom.id),
+                    &prefill_stage.kv_produced,
+                ),
             },
             prefill_output: prefill_stage.output.clone(),
         };
+
+        // Verify handoff before decode
+        prefill_receipt.kv_handoff.verify("prefill")?;
 
         let decode_stage = self
             .execute_remote_stage(
@@ -740,15 +752,75 @@ pub struct KVHandoff {
     pub metadata: KVHandoffMetadata,
 }
 
-/// Minimal metadata for KV handoff, reserved for future verification.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+impl KVHandoff {
+    /// Verify handoff consistency before consumption.
+    pub fn verify(&self, expected_source: &str) -> Result<(), String> {
+        if self.source_stage != expected_source {
+            return Err(format!(
+                "handoff source mismatch: expected '{}', got '{}'",
+                expected_source, self.source_stage
+            ));
+        }
+        if self.metadata.chunk_count != self.chunks.len() {
+            return Err(format!(
+                "handoff chunk count mismatch: metadata says {}, actual {}",
+                self.metadata.chunk_count,
+                self.chunks.len()
+            ));
+        }
+        let actual_bytes: usize = self.chunks.iter().map(|c| c.byte_size).sum();
+        if self.metadata.total_bytes != actual_bytes {
+            return Err(format!(
+                "handoff total bytes mismatch: metadata says {}, actual {}",
+                self.metadata.total_bytes, actual_bytes
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Minimal metadata for KV handoff, with basic verification fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KVHandoffMetadata {
+    /// Unique handoff identifier for tracking.
+    pub handoff_id: String,
+    /// Number of chunks in this handoff.
+    pub chunk_count: usize,
+    /// Total bytes across all chunks.
+    pub total_bytes: usize,
     /// Reserved for future KV ownership proof.
     #[serde(default)]
     pub ownership_hint: Option<String>,
     /// Reserved for future KV migration proof.
     #[serde(default)]
     pub migration_hint: Option<String>,
+}
+
+impl KVHandoffMetadata {
+    /// Generate metadata from chunks for verification.
+    pub fn from_chunks(handoff_id: String, chunks: &[KVChunk]) -> Self {
+        let chunk_count = chunks.len();
+        let total_bytes = chunks.iter().map(|c| c.byte_size).sum();
+        Self {
+            handoff_id,
+            chunk_count,
+            total_bytes,
+            ownership_hint: None,
+            migration_hint: None,
+        }
+    }
+}
+
+impl Default for KVHandoffMetadata {
+    fn default() -> Self {
+        Self {
+            handoff_id: String::new(),
+            chunk_count: 0,
+            total_bytes: 0,
+            ownership_hint: None,
+            migration_hint: None,
+        }
+    }
 }
 
 /// Intermediate state produced after Prefill and passed into Decode.
