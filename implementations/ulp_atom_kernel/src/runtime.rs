@@ -89,6 +89,12 @@ pub struct SlotOffer {
     /// If None, this is a local-only node.
     #[serde(default)]
     pub endpoint: Option<String>,
+    /// KV availability hint for mesh-ready coordination.
+    #[serde(default)]
+    pub kv_available: bool,
+    /// Minimal capabilities descriptor.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
 }
 
 /// Home node claiming a slot on a specific ephemeral node.

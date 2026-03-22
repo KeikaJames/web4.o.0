@@ -1044,5 +1044,7 @@ fn remote_offer(
         capacity_hint,
         expires_in_ms,
         endpoint: Some(endpoint.to_string()),
+        kv_available: false,
+        capabilities: Vec::new(),
     }
 }
