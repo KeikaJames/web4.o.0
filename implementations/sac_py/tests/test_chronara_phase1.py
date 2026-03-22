@@ -46,9 +46,9 @@ def test_collector_routes_to_traces():
     collector.admit_observation({"strategy_signal": True})
     collector.admit_observation({"data": "param"})
 
-    assert len(collector.explicit_trace) == 1
-    assert len(collector.strategy_trace) == 1
-    assert len(collector.parameter_queue) == 1
+    assert len(collector.explicit_trace.get_all()) == 1
+    assert len(collector.strategy_trace.get_all()) == 1
+    assert len(collector.parameter_queue.get_all()) == 1
 
 
 def test_snapshot_manager_semantics():
@@ -89,6 +89,12 @@ def test_consolidator_prune_quantile():
 
     pruned = consolidator.prune_parameters(phi)
     assert len(pruned) < len(phi)
+
+
+def test_consolidator_prune_empty_parameters():
+    """Consolidator returns an empty dict for empty inputs."""
+    consolidator = Consolidator()
+    assert consolidator.prune_parameters({}) == {}
 
 
 def test_governor_validation_and_decision():

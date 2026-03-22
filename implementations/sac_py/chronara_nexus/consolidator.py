@@ -1,7 +1,7 @@
 """Consolidator: Candidate adapter lifecycle and micro-batch evolution."""
 
 import numpy as np
-from typing import Optional
+from typing import Optional, Dict
 from .types import AdapterRef, SnapshotRef
 
 
@@ -13,7 +13,7 @@ class Consolidator:
         self.micro_batch_buffer = []
         self.lr = lr
         self.gamma = gamma
-        self.phi = {}
+        self.phi: Dict[str, float] = {"p0": 1.0, "p1": 0.5, "p2": -0.3}
 
     def create_candidate(self, base_adapter: AdapterRef) -> AdapterRef:
         """Create new candidate adapter from base."""
@@ -29,24 +29,42 @@ class Consolidator:
         """Add observation to micro-batch buffer."""
         self.micro_batch_buffer.append(observation)
 
+    def _extract_numeric_summary(self, observations: list) -> np.ndarray:
+        """Extract deterministic numeric summary from observations."""
+        summary = []
+        for obs in observations:
+            if isinstance(obs.get("data"), (int, float)):
+                summary.append(float(obs["data"]))
+            elif "explicit_feedback" in obs:
+                summary.append(1.0)
+            elif "strategy_signal" in obs:
+                summary.append(0.5)
+            else:
+                summary.append(0.0)
+        return np.array(summary[:10])
+
     def evolve_micro_batch(self) -> bool:
         """Micro-batch parameter update with shrink formula."""
         if len(self.micro_batch_buffer) < 10:
             return False
 
-        # Placeholder gradient computation
-        g = np.random.randn(10)
+        # Deterministic gradient from observations
+        numeric_summary = self._extract_numeric_summary(self.micro_batch_buffer)
+        g = numeric_summary - np.mean(numeric_summary)
         g_clip = np.clip(g, -1.0, 1.0)
 
         # Shrink formula: phi <- phi - lr * g_clip - gamma * phi
-        for key in self.phi:
-            self.phi[key] = self.phi[key] - self.lr * g_clip[0] - self.gamma * self.phi[key]
+        for i, key in enumerate(sorted(self.phi.keys())):
+            grad_component = g_clip[i % len(g_clip)]
+            self.phi[key] = self.phi[key] - self.lr * grad_component - self.gamma * self.phi[key]
 
         self.micro_batch_buffer.clear()
         return True
 
     def prune_parameters(self, phi: dict) -> dict:
         """Prune parameters using quantile 0.1."""
+        if not phi:
+            return {}
         values = np.array(list(phi.values()))
         threshold = np.quantile(np.abs(values), 0.1)
         return {k: v for k, v in phi.items() if np.abs(v) > threshold}

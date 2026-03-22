@@ -6,6 +6,7 @@ from .consolidator import Consolidator
 from .governor import Governor
 from .admission_gate import AdmissionGate, ObservationType
 from .snapshot_manager import SnapshotManager
+from .memory_sink import MemorySink, InMemorySink
 
 __all__ = [
     "AdapterRef",
@@ -19,4 +20,6 @@ __all__ = [
     "AdmissionGate",
     "ObservationType",
     "SnapshotManager",
+    "MemorySink",
+    "InMemorySink",
 ]

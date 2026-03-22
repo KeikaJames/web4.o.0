@@ -101,14 +101,33 @@ class Governor:
         return report
 
     def validate_candidate(self, candidate: AdapterRef) -> ValidationReport:
-        """Minimal validation logic."""
-        passed = candidate.generation > self.active_adapter.generation
+        """Minimal validation logic with real metric summary."""
+        generation_advanced = candidate.generation > self.active_adapter.generation
+
+        # Real metric: check generation delta
+        generation_delta = candidate.generation - self.active_adapter.generation
+
+        passed = generation_advanced and generation_delta == 1
+
+        metric_summary = {
+            "generation_delta": generation_delta,
+            "generation_advanced": generation_advanced,
+            "expected_delta": 1,
+        }
+
+        reason = None
+        if not passed:
+            if not generation_advanced:
+                reason = "generation not advanced"
+            elif generation_delta != 1:
+                reason = f"generation delta {generation_delta} != 1"
+
         report = ValidationReport(
             adapter_id=candidate.adapter_id,
             generation=candidate.generation,
             passed=passed,
-            metric_summary={"placeholder": True},
-            reason=None if passed else "generation not advanced"
+            metric_summary=metric_summary,
+            reason=reason
         )
         self.last_validation_report = report
         return report

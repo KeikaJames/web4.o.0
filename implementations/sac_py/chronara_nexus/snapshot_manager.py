@@ -1,6 +1,7 @@
 """Snapshot manager: candidate, window, and stable snapshots."""
 
-from typing import Optional
+from typing import Optional, List
+from collections import deque
 from .types import SnapshotRef, AdapterRef
 
 
@@ -9,8 +10,8 @@ class SnapshotManager:
 
     def __init__(self):
         self.candidate_snapshot: Optional[SnapshotRef] = None
-        self.window_snapshot: Optional[SnapshotRef] = None
-        self.stable_snapshot: Optional[SnapshotRef] = None
+        self.window_snapshots: deque = deque(maxlen=3)
+        self.stable_snapshots: deque = deque(maxlen=5)
 
     def save_candidate_snapshot(self, adapter: AdapterRef) -> SnapshotRef:
         """Save candidate adapter snapshot."""
@@ -24,27 +25,37 @@ class SnapshotManager:
         return snapshot
 
     def save_window_snapshot(self, adapter: AdapterRef) -> SnapshotRef:
-        """Save window snapshot."""
+        """Save window snapshot (keep recent 3)."""
         snapshot = SnapshotRef(
             snapshot_id=f"{adapter.adapter_id}-gen{adapter.generation}-window",
             adapter_id=adapter.adapter_id,
             generation=adapter.generation,
             byte_size=0
         )
-        self.window_snapshot = snapshot
+        self.window_snapshots.append(snapshot)
         return snapshot
 
     def save_stable_snapshot(self, adapter: AdapterRef) -> SnapshotRef:
-        """Save stable snapshot."""
+        """Save stable snapshot (keep recent 5)."""
         snapshot = SnapshotRef(
             snapshot_id=f"{adapter.adapter_id}-gen{adapter.generation}-stable",
             adapter_id=adapter.adapter_id,
             generation=adapter.generation,
             byte_size=0
         )
-        self.stable_snapshot = snapshot
+        self.stable_snapshots.append(snapshot)
         return snapshot
 
     def get_rollback_target(self) -> Optional[SnapshotRef]:
-        """Get rollback target (stable snapshot)."""
-        return self.stable_snapshot
+        """Get rollback target (most recent stable snapshot)."""
+        if self.stable_snapshots:
+            return self.stable_snapshots[-1]
+        return None
+
+    def get_window_snapshots(self) -> List[SnapshotRef]:
+        """Get all window snapshots."""
+        return list(self.window_snapshots)
+
+    def get_stable_snapshots(self) -> List[SnapshotRef]:
+        """Get all stable snapshots."""
+        return list(self.stable_snapshots)

@@ -3,6 +3,7 @@
 from typing import Optional
 from .types import AdapterRef
 from .admission_gate import AdmissionGate, ObservationType
+from .memory_sink import InMemorySink
 
 
 class Collector:
@@ -11,9 +12,9 @@ class Collector:
     def __init__(self, active_adapter: AdapterRef):
         self.active_adapter = active_adapter
         self.admission_gate = AdmissionGate()
-        self.explicit_trace = []
-        self.strategy_trace = []
-        self.parameter_queue = []
+        self.explicit_trace = InMemorySink()
+        self.strategy_trace = InMemorySink()
+        self.parameter_queue = InMemorySink()
 
     def admit_observation(self, observation: dict) -> ObservationType:
         """Classify observation and route to appropriate memory layer."""
