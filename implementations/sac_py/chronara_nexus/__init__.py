@@ -3,9 +3,11 @@
 from .types import (
     AdapterRef,
     AdapterManifest,
+    AdapterSelection,
     SnapshotRef,
     ValidationReport,
     AdapterMode,
+    AdapterSpecialization,
     ObservationType,
 )
 from .collector import Collector
@@ -25,9 +27,11 @@ from .deliberation import (
 __all__ = [
     "AdapterRef",
     "AdapterManifest",
+    "AdapterSelection",
     "SnapshotRef",
     "ValidationReport",
     "AdapterMode",
+    "AdapterSpecialization",
     "Collector",
     "Consolidator",
     "Governor",

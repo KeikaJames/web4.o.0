@@ -1,19 +1,41 @@
 """Governor: Validation, promotion, and rollback protocol."""
 
 from typing import Optional, Dict, Any
-from .types import AdapterRef, ValidationReport, AdapterMode
+from .types import AdapterRef, ValidationReport, AdapterMode, AdapterSpecialization, AdapterSelection
 
 
 class Governor:
-    """Manages active/candidate/stable adapter lifecycle."""
+    """Manages active/candidate/stable adapter lifecycle with specialization awareness.
+
+    Specialization roles:
+    - stable: Long-term validated preferences (fallback base)
+    - shared: Cross-task shared parameters (optional augmentation)
+    - candidate: Current experiment under evaluation (isolated)
+    """
 
     def __init__(self, initial_adapter: AdapterRef, enable_deliberation: bool = False):
-        self.active_adapter = initial_adapter
+        # Initialize with STABLE specialization
+        self.active_adapter = AdapterRef(
+            adapter_id=initial_adapter.adapter_id,
+            generation=initial_adapter.generation,
+            mode=initial_adapter.mode,
+            specialization=AdapterSpecialization.STABLE
+        )
         self.candidate_adapter: Optional[AdapterRef] = None
-        self.stable_adapter = initial_adapter
+        self.shared_adapter: Optional[AdapterRef] = None
+        self.stable_adapter = self.active_adapter
+        self._pre_promote_stable: Optional[AdapterRef] = None  # For rollback
         self.last_validation_report: Optional[ValidationReport] = None
         self.enable_deliberation = enable_deliberation
         self._deliberation = None
+
+    def get_adapter_selection(self) -> AdapterSelection:
+        """Get current specialization-aware adapter selection."""
+        return AdapterSelection(
+            stable=self.stable_adapter,
+            shared=self.shared_adapter,
+            candidate=self.candidate_adapter
+        )
 
     def _get_deliberation(self):
         """Lazy load deliberation to avoid circular import."""
@@ -24,23 +46,39 @@ class Governor:
 
     def create_shadow_request(self, candidate: AdapterRef, input_data: bytes) -> Dict[str, Any]:
         """Create a shadow eval request for candidate adapter."""
+        # Ensure candidate has CANDIDATE specialization
+        candidate = AdapterRef(
+            adapter_id=candidate.adapter_id,
+            generation=candidate.generation,
+            mode=candidate.mode,
+            specialization=AdapterSpecialization.CANDIDATE
+        )
         self.candidate_adapter = candidate
         return {
             "active_adapter": {
                 "adapter_id": self.active_adapter.adapter_id,
                 "generation": self.active_adapter.generation,
                 "mode": self.active_adapter.mode.value,
+                "specialization": self.active_adapter.specialization.value,
             },
             "candidate_adapter": {
                 "adapter_id": candidate.adapter_id,
                 "generation": candidate.generation,
                 "mode": AdapterMode.SHADOW_EVAL.value,
+                "specialization": AdapterSpecialization.CANDIDATE.value,
             },
             "input": input_data,
         }
 
     def validate_from_atom_result(self, candidate: AdapterRef, atom_result: Dict[str, Any]) -> ValidationReport:
         """Validate candidate using atom validation_result."""
+        # Ensure candidate has CANDIDATE specialization
+        candidate = AdapterRef(
+            adapter_id=candidate.adapter_id,
+            generation=candidate.generation,
+            mode=candidate.mode,
+            specialization=AdapterSpecialization.CANDIDATE
+        )
         self.candidate_adapter = candidate
 
         # Optional deliberation pre-processing
@@ -64,7 +102,10 @@ class Governor:
                             generation=candidate.generation,
                             passed=False,
                             metric_summary={"source": "deliberation_rejected"},
-                            reason="deliberation quality check failed"
+                            reason="deliberation quality check failed",
+                            specialization_summary={
+                                AdapterSpecialization.CANDIDATE: {"status": "rejected", "source": "deliberation"}
+                            }
                         )
                         self.last_validation_report = report
                         return report
@@ -122,12 +163,30 @@ class Governor:
 
             reason = None if passed else "lineage mismatch or generation not advanced"
 
+        # Build specialization-aware summary
+        specialization_summary = {
+            AdapterSpecialization.CANDIDATE: {
+                "status": "validated" if passed else "rejected",
+                "generation": candidate.generation,
+            },
+            AdapterSpecialization.STABLE: {
+                "generation": self.stable_adapter.generation if self.stable_adapter else None,
+                "unchanged": True,
+            }
+        }
+        if self.shared_adapter:
+            specialization_summary[AdapterSpecialization.SHARED] = {
+                "generation": self.shared_adapter.generation,
+                "unchanged": True,
+            }
+
         report = ValidationReport(
             adapter_id=candidate.adapter_id,
             generation=candidate.generation,
             passed=passed,
             metric_summary=metric_summary,
-            reason=reason
+            reason=reason,
+            specialization_summary=specialization_summary
         )
         self.last_validation_report = report
         return report
@@ -138,6 +197,13 @@ class Governor:
 
     def validate_from_comparison(self, candidate: AdapterRef, comparison_result: Dict[str, Any]) -> ValidationReport:
         """Validate candidate using shadow comparison result."""
+        # Ensure candidate has CANDIDATE specialization
+        candidate = AdapterRef(
+            adapter_id=candidate.adapter_id,
+            generation=candidate.generation,
+            mode=candidate.mode,
+            specialization=AdapterSpecialization.CANDIDATE
+        )
         self.candidate_adapter = candidate
         lineage_valid = comparison_result.get("lineage_valid", False)
         output_match = comparison_result.get("output_match", False)
@@ -168,18 +234,45 @@ class Governor:
             elif not generation_advanced:
                 reason = "generation not advanced"
 
+        # Build specialization-aware summary
+        specialization_summary = {
+            AdapterSpecialization.CANDIDATE: {
+                "status": "validated" if passed else "rejected",
+                "generation": candidate.generation,
+            },
+            AdapterSpecialization.STABLE: {
+                "generation": self.stable_adapter.generation if self.stable_adapter else None,
+                "unchanged": True,
+            }
+        }
+        if self.shared_adapter:
+            specialization_summary[AdapterSpecialization.SHARED] = {
+                "generation": self.shared_adapter.generation,
+                "unchanged": True,
+            }
+
         report = ValidationReport(
             adapter_id=candidate.adapter_id,
             generation=candidate.generation,
             passed=passed,
             metric_summary=metric_summary,
-            reason=reason
+            reason=reason,
+            specialization_summary=specialization_summary
         )
         self.last_validation_report = report
         return report
 
     def validate_candidate(self, candidate: AdapterRef) -> ValidationReport:
         """Minimal validation logic with real metric summary."""
+        # Ensure candidate has CANDIDATE specialization
+        candidate = AdapterRef(
+            adapter_id=candidate.adapter_id,
+            generation=candidate.generation,
+            mode=candidate.mode,
+            specialization=AdapterSpecialization.CANDIDATE
+        )
+        self.candidate_adapter = candidate
+
         generation_advanced = candidate.generation > self.active_adapter.generation
 
         # Real metric: check generation delta
@@ -200,18 +293,41 @@ class Governor:
             elif generation_delta != 1:
                 reason = f"generation delta {generation_delta} != 1"
 
+        # Build specialization-aware summary
+        specialization_summary = {
+            AdapterSpecialization.CANDIDATE: {
+                "status": "validated" if passed else "rejected",
+                "generation": candidate.generation,
+            },
+            AdapterSpecialization.STABLE: {
+                "generation": self.stable_adapter.generation if self.stable_adapter else None,
+                "unchanged": True,
+            }
+        }
+        if self.shared_adapter:
+            specialization_summary[AdapterSpecialization.SHARED] = {
+                "generation": self.shared_adapter.generation,
+                "unchanged": True,
+            }
+
         report = ValidationReport(
             adapter_id=candidate.adapter_id,
             generation=candidate.generation,
             passed=passed,
             metric_summary=metric_summary,
-            reason=reason
+            reason=reason,
+            specialization_summary=specialization_summary
         )
         self.last_validation_report = report
         return report
 
     def promote_candidate(self, candidate: AdapterRef) -> bool:
-        """Promote candidate to active."""
+        """Promote candidate to stable/active.
+
+        Candidate (CANDIDATE) -> Stable (STABLE)
+        Shared adapter unchanged.
+        Saves previous stable for potential rollback.
+        """
         report = self.last_validation_report
         if report is None:
             return False
@@ -219,18 +335,65 @@ class Governor:
             return False
         if report.adapter_id != candidate.adapter_id or report.generation != candidate.generation:
             return False
-        self.active_adapter = candidate
+
+        # Save current stable for rollback
+        self._pre_promote_stable = self.stable_adapter
+
+        # Promote candidate to stable: upgrade specialization to STABLE
+        promoted = AdapterRef(
+            adapter_id=candidate.adapter_id,
+            generation=candidate.generation,
+            mode=candidate.mode,
+            specialization=AdapterSpecialization.STABLE
+        )
+
+        self.stable_adapter = promoted
+        self.active_adapter = promoted
         self.candidate_adapter = None
         self.last_validation_report = None
         return True
 
     def rollback_to_stable(self):
-        """Rollback active to last stable."""
+        """Rollback active to last stable.
+
+        If pre-promote stable exists, restores it.
+        Otherwise uses current stable_adapter.
+        Preserves shared adapter if exists.
+        Clears candidate.
+        """
+        if self._pre_promote_stable is not None:
+            self.stable_adapter = self._pre_promote_stable
+            self._pre_promote_stable = None
         self.active_adapter = self.stable_adapter
+        self.candidate_adapter = None
 
     def mark_stable(self):
-        """Mark current active as stable."""
-        self.stable_adapter = self.active_adapter
+        """Mark current active as stable.
+
+        Clears pre-promote state as the promotion is now committed.
+        """
+        self.stable_adapter = AdapterRef(
+            adapter_id=self.active_adapter.adapter_id,
+            generation=self.active_adapter.generation,
+            mode=self.active_adapter.mode,
+            specialization=AdapterSpecialization.STABLE
+        )
+        # Clear pre-promote state as promotion is committed
+        self._pre_promote_stable = None
+
+    def rollback_specialization(self, spec: AdapterSpecialization):
+        """Rollback specific specialization.
+
+        - STABLE: Rollback to previous stable (if tracked externally)
+        - SHARED: Clear shared adapter
+        - CANDIDATE: Clear candidate adapter
+        """
+        if spec == AdapterSpecialization.STABLE:
+            self.rollback_to_stable()
+        elif spec == AdapterSpecialization.SHARED:
+            self.shared_adapter = None
+        elif spec == AdapterSpecialization.CANDIDATE:
+            self.candidate_adapter = None
 
     def decide(self, candidate: AdapterRef, validation_report: ValidationReport) -> str:
         """Decide whether to promote or reject candidate."""

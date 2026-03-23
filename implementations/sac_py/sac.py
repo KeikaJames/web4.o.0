@@ -519,13 +519,42 @@ class SACContainer:
         return self._chronara_collector.admit_observation(observation)
 
     def current_adapter_ref(self):
-        """Get current active adapter reference."""
+        """Get current active adapter reference.
+
+        Returns the serve adapter (stable specialization).
+        For full specialization-aware selection, use current_adapter_selection().
+        """
         if not hasattr(self, '_chronara_collector'):
             self.init_chronara()
         if hasattr(self, '_chronara_governor'):
-            self._chronara_collector.set_active_adapter(self._chronara_governor.active_adapter)
-            return self._chronara_governor.active_adapter
+            selection = self._chronara_governor.get_adapter_selection()
+            self._chronara_collector.set_active_adapter(selection.get_serve_adapter())
+            return selection.get_serve_adapter()
         return self._chronara_collector.get_active_adapter()
+
+    def current_adapter_selection(self):
+        """Get specialization-aware adapter selection.
+
+        Returns AdapterSelection with stable, shared, and candidate adapters.
+        Serve path uses stable + optional shared augmentation.
+        Candidate remains isolated until promoted.
+        """
+        if not hasattr(self, '_chronara_governor'):
+            self.init_chronara()
+        return self._chronara_governor.get_adapter_selection()
+
+    def fallback_to_stable(self) -> bool:
+        """Fallback to stable adapter on specialization failure.
+
+        Clears candidate, resets to stable serve path.
+        Preserves shared adapter if exists.
+        """
+        if not hasattr(self, '_chronara_governor'):
+            self.init_chronara()
+        self._chronara_governor.rollback_to_stable()
+        if hasattr(self, '_chronara_collector'):
+            self._chronara_collector.set_active_adapter(self._chronara_governor.active_adapter)
+        return True
 
     def promote_candidate_if_valid(self, candidate):
         """Promote candidate adapter if validation passes."""

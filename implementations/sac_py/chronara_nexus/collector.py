@@ -1,17 +1,24 @@
 """Collector: observation classification and in-memory routing."""
 
-from typing import Optional
-from .types import AdapterRef, ObservationType
+from typing import Optional, List
+from .types import AdapterRef, ObservationType, AdapterSpecialization
 
 
 class Collector:
-    """Classify observations and route them into in-memory traces."""
+    """Classify observations and route them into in-memory traces.
+
+    Specialization-aware routing:
+    - explicit_only: Does not enter parameter layer (isolated trace)
+    - strategy_only: Maps to SHARED semantics (cross-task shared preferences)
+    - parameter_candidate: Maps to CANDIDATE path (experimental parameters)
+    """
 
     def __init__(self, active_adapter: AdapterRef, enable_deliberation: bool = False):
         self.active_adapter = active_adapter
-        self.explicit_trace = []
-        self.strategy_trace = []
-        self.parameter_queue = []
+        self.explicit_trace: List[dict] = []
+        self.strategy_trace: List[dict] = []
+        self.parameter_queue: List[dict] = []
+        self.shared_queue: List[dict] = []
         self.enable_deliberation = enable_deliberation
         self._deliberation = None
 
@@ -32,15 +39,27 @@ class Collector:
         return ObservationType.PARAMETER_CANDIDATE
 
     def admit_observation(self, observation: dict) -> ObservationType:
-        """Classify observation and route to appropriate memory layer."""
+        """Classify observation and route to appropriate memory layer.
+
+        Specialization routing:
+        - EXPLICIT_ONLY -> explicit_trace (no parameter layer entry)
+        - STRATEGY_ONLY -> strategy_trace + shared_queue (SHARED semantics)
+        - PARAMETER_CANDIDATE -> parameter_queue (CANDIDATE path)
+        """
         obs_type = self.classify(observation)
 
         if obs_type == ObservationType.EXPLICIT_ONLY:
             self.explicit_trace.append(observation)
         elif obs_type == ObservationType.STRATEGY_ONLY:
+            # Strategy signals map to SHARED specialization semantics
             self.strategy_trace.append(observation)
+            self.shared_queue.append({
+                **observation,
+                "_specialization_target": AdapterSpecialization.SHARED.value
+            })
         else:
             # PARAMETER_CANDIDATE: optionally enhance via deliberation
+            enhanced_obs = observation
             if self.enable_deliberation:
                 deliberation = self._get_deliberation()
                 if deliberation:
@@ -50,14 +69,14 @@ class Collector:
                         result = deliberation.deliberate(request)
                         # Use synthesized output if accepted
                         enhanced_obs = result.synthesized_output if result.accepted else observation
-                        self.parameter_queue.append(enhanced_obs)
                     except Exception:
-                        # Fallback on deliberation failure
-                        self.parameter_queue.append(observation)
-                else:
-                    self.parameter_queue.append(observation)
-            else:
-                self.parameter_queue.append(observation)
+                        pass  # Fallback to original observation
+
+            # Route to candidate path with specialization marker
+            self.parameter_queue.append({
+                **enhanced_obs,
+                "_specialization_target": AdapterSpecialization.CANDIDATE.value
+            })
 
         return obs_type
 
@@ -68,3 +87,23 @@ class Collector:
     def set_active_adapter(self, adapter_ref: AdapterRef):
         """Update active adapter."""
         self.active_adapter = adapter_ref
+
+    def get_specialization_queue(self, specialization: AdapterSpecialization) -> List[dict]:
+        """Get observation queue for specific specialization.
+
+        - STABLE: Not directly accumulated, derived from validated candidate
+        - SHARED: Returns shared_queue (strategy_only observations)
+        - CANDIDATE: Returns parameter_queue (parameter_candidate observations)
+        """
+        if specialization == AdapterSpecialization.SHARED:
+            return self.shared_queue
+        if specialization == AdapterSpecialization.CANDIDATE:
+            return self.parameter_queue
+        return []
+
+    def clear_specialization_queue(self, specialization: AdapterSpecialization):
+        """Clear observation queue for specific specialization."""
+        if specialization == AdapterSpecialization.SHARED:
+            self.shared_queue.clear()
+        elif specialization == AdapterSpecialization.CANDIDATE:
+            self.parameter_queue.clear()
