@@ -52,27 +52,36 @@ def test_bounded_deliberation_rejects_low_quality():
 
 
 def test_collector_with_deliberation_enabled():
-    """Collector with deliberation enhances parameter candidates."""
+    """Phase 9: Collector with multi-role review marks parameter candidates."""
     adapter = AdapterRef("base", 1, AdapterMode.SERVE)
     collector = Collector(adapter, enable_deliberation=True)
 
-    # High quality observation should be enhanced
+    # High quality observation should be marked with consensus
     collector.admit_observation({"data": 0.8})
 
     assert len(collector.parameter_queue) == 1
     enhanced = collector.parameter_queue[0]
-    assert enhanced.get("deliberation_enhanced") is True
+    # Phase 9: Multi-role review adds consensus_status and review metadata
+    assert enhanced.get("_consensus_status") == "consensus_accept"
+    assert enhanced.get("_deliberation_outcome") == "candidate_ready"
+    assert enhanced.get("_has_disagreement") is False
+    assert "_review_request_id" in enhanced
 
 
-def test_collector_deliberation_fallback():
-    """Collector falls back on deliberation failure."""
+def test_collector_deliberation_reject_routes_to_explicit_trace():
+    """Phase 8: Rejected observations go to explicit_trace with rejection marker."""
     adapter = AdapterRef("base", 1, AdapterMode.SERVE)
     collector = Collector(adapter, enable_deliberation=True)
 
-    # Low quality observation should still be added (rejected but not dropped)
+    # Low quality observation gets rejected and goes to explicit_trace
     collector.admit_observation({"data": 0.1})
 
-    assert len(collector.parameter_queue) == 1
+    # Rejected observation should not be in parameter_queue
+    assert len(collector.parameter_queue) == 0
+    # But should be in explicit_trace with rejection marker
+    assert len(collector.explicit_trace) == 1
+    rejected = collector.explicit_trace[0]
+    assert rejected.get("_deliberation_rejected") is True
 
 
 def test_collector_without_deliberation():

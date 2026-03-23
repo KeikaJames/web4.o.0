@@ -2,16 +2,19 @@
 
 from typing import Optional, Dict, Any, List
 from .types import AdapterRef, ValidationReport, AdapterMode, AdapterSpecialization, AdapterSelection
+from .deliberation import DeliberationOutcome
 
 
 class ValidationTrace:
-    """Minimal trace for validation/shadow execution.
+    """Minimal trace for validation/shadow execution with Phase 9 multi-role review.
 
     Records:
     - active adapter identity
     - candidate adapter identity
     - specialization combination
     - comparison result
+    - deliberation outcome (Phase 8)
+    - multi_role_review_summary (Phase 9)
     - fail/approve reason
     """
     def __init__(
@@ -21,6 +24,9 @@ class ValidationTrace:
         status: str,
         passed: bool,
         reason: Optional[str] = None,
+        deliberation_outcome: Optional[str] = None,
+        deliberation_trace: Optional[Dict[str, Any]] = None,
+        multi_role_review_summary: Optional[Dict[str, Any]] = None,
     ):
         self.active_id = active.adapter_id
         self.active_generation = active.generation
@@ -31,9 +37,12 @@ class ValidationTrace:
         self.status = status
         self.passed = passed
         self.reason = reason
+        self.deliberation_outcome = deliberation_outcome
+        self.deliberation_trace = deliberation_trace or {}
+        self.multi_role_review_summary = multi_role_review_summary or {}
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result = {
             "active": {
                 "id": self.active_id,
                 "generation": self.active_generation,
@@ -48,6 +57,13 @@ class ValidationTrace:
             "passed": self.passed,
             "reason": self.reason,
         }
+        if self.deliberation_outcome:
+            result["deliberation_outcome"] = self.deliberation_outcome
+        if self.deliberation_trace:
+            result["deliberation_trace"] = self.deliberation_trace
+        if self.multi_role_review_summary:
+            result["multi_role_review_summary"] = self.multi_role_review_summary
+        return result
 
 
 class Governor:
@@ -128,12 +144,14 @@ class Governor:
         )
         self.candidate_adapter = candidate
 
-        # Optional deliberation pre-processing
+        # Phase 8: Structured deliberation pre-processing
+        deliberation_outcome = None
+        deliberation_quality = None
         if self.enable_deliberation:
             deliberation = self._get_deliberation()
             if deliberation:
                 try:
-                    from .deliberation import DeliberationRequest
+                    from .deliberation import DeliberationRequest, DeliberationOutcome
                     # Create deliberation input from atom_result
                     delib_obs = {
                         "atom_result": atom_result,
@@ -142,20 +160,53 @@ class Governor:
                     }
                     request = DeliberationRequest(observation=delib_obs)
                     result = deliberation.deliberate(request)
-                    # If deliberation rejects, mark as failed
-                    if not result.accepted:
+
+                    deliberation_outcome = result.outcome.value
+                    deliberation_quality = result.quality_score
+
+                    # Phase 8: Handle structured outcomes
+                    if result.outcome == DeliberationOutcome.REJECT:
+                        # Reject candidate based on deliberation
                         report = ValidationReport(
                             adapter_id=candidate.adapter_id,
                             generation=candidate.generation,
                             passed=False,
-                            metric_summary={"source": "deliberation_rejected"},
-                            reason="deliberation quality check failed",
+                            metric_summary={
+                                "source": "deliberation_rejected",
+                                "deliberation_outcome": result.outcome.value,
+                                "quality_score": result.quality_score,
+                            },
+                            reason=f"deliberation quality check failed: {result.verifier_judgement.get('reason', 'unknown')}",
                             specialization_summary={
-                                AdapterSpecialization.CANDIDATE: {"status": "rejected", "source": "deliberation"}
-                            }
+                                AdapterSpecialization.CANDIDATE: {
+                                    "status": "rejected",
+                                    "source": "deliberation",
+                                    "outcome": result.outcome.value,
+                                }
+                            },
+                            deliberation_outcome=result.outcome.value,
+                            deliberation_quality=result.quality_score,
                         )
                         self.last_validation_report = report
+
+                        # Record trace with deliberation info
+                        trace = ValidationTrace(
+                            active=self.active_adapter,
+                            candidate=candidate,
+                            status="deliberation_rejected",
+                            passed=False,
+                            reason="deliberation quality check failed",
+                            deliberation_outcome=result.outcome.value,
+                            deliberation_trace=result.to_trace_dict(),
+                        )
+                        self._validation_traces.append(trace)
                         return report
+                    elif result.outcome == DeliberationOutcome.STRATEGY_ONLY:
+                        # Strategy signal - mark but continue validation
+                        # The candidate might still be valid but strategy layer takes priority
+                        pass
+                    # CANDIDATE_READY continues to normal validation
+
                 except Exception:
                     # Fallback on deliberation failure
                     pass
@@ -241,15 +292,36 @@ class Governor:
                 "unchanged": True,
             }
 
+        # Include deliberation info in metric_summary if available
+        if deliberation_outcome:
+            metric_summary["deliberation_outcome"] = deliberation_outcome
+        if deliberation_quality is not None:
+            metric_summary["deliberation_quality"] = deliberation_quality
+
         report = ValidationReport(
             adapter_id=candidate.adapter_id,
             generation=candidate.generation,
             passed=passed,
             metric_summary=metric_summary,
             reason=reason,
-            specialization_summary=specialization_summary
+            specialization_summary=specialization_summary,
+            deliberation_outcome=deliberation_outcome,
+            deliberation_quality=deliberation_quality,
         )
         self.last_validation_report = report
+
+        # Record validation trace with deliberation info
+        trace = ValidationTrace(
+            active=self.active_adapter,
+            candidate=candidate,
+            status="candidate_validated" if passed else "candidate_rejected",
+            passed=passed,
+            reason=reason,
+            deliberation_outcome=deliberation_outcome,
+            deliberation_trace={"quality_score": deliberation_quality} if deliberation_quality else None,
+        )
+        self._validation_traces.append(trace)
+
         return report
 
     def validate_from_lineage(self, candidate: AdapterRef, atom_result: Dict[str, Any]) -> ValidationReport:
@@ -382,23 +454,56 @@ class Governor:
                 "unchanged": True,
             }
 
+        # Extract deliberation info from comparison result
+        delib_outcome = comparison_result.get("deliberation_outcome")
+        delib_trace = comparison_result.get("deliberation_trace")
+        delib_quality = comparison_result.get("deliberation_quality")
+
+        # Phase 9: Extract multi-role review info from comparison result
+        multi_role_review = comparison_result.get("multi_role_review", {})
+        consensus_status = multi_role_review.get("consensus_status")
+        has_disagreement = multi_role_review.get("has_disagreement", False)
+
+        # Add deliberation fields to metric_summary
+        if delib_outcome:
+            metric_summary["deliberation_outcome"] = delib_outcome
+        if delib_quality is not None:
+            metric_summary["deliberation_quality"] = delib_quality
+
+        # Phase 9: Add multi-role review fields to metric_summary
+        if consensus_status:
+            metric_summary["consensus_status"] = consensus_status
+        if has_disagreement:
+            metric_summary["has_role_disagreement"] = has_disagreement
+
+        # Phase 9: Extract consensus info for ValidationReport
+        consensus_status_for_report = multi_role_review.get("consensus_status") if multi_role_review else None
+        has_disagreement_for_report = multi_role_review.get("has_disagreement") if multi_role_review else None
+
         report = ValidationReport(
             adapter_id=candidate.adapter_id,
             generation=candidate.generation,
             passed=passed,
             metric_summary=metric_summary,
             reason=reason,
-            specialization_summary=specialization_summary
+            specialization_summary=specialization_summary,
+            deliberation_outcome=delib_outcome,
+            deliberation_quality=delib_quality,
+            consensus_status=consensus_status_for_report,
+            has_role_disagreement=has_disagreement_for_report,
         )
         self.last_validation_report = report
 
-        # Record validation trace (Phase 7)
+        # Record validation trace (Phase 7 + Phase 8 + Phase 9)
         trace = ValidationTrace(
             active=self.active_adapter,
             candidate=candidate,
             status=status,
             passed=passed,
             reason=reason,
+            deliberation_outcome=delib_outcome,
+            deliberation_trace=delib_trace,
+            multi_role_review_summary=multi_role_review if multi_role_review else None,
         )
         self._validation_traces.append(trace)
 
@@ -564,13 +669,17 @@ class Governor:
         self._validation_traces.clear()
 
     def can_promote_based_on_comparison(self, comparison_result: Dict[str, Any]) -> bool:
-        """Check if comparison result permits promotion (Phase 7 gate).
+        """Check if comparison result permits promotion (Phase 7 + Phase 9 gate).
 
-        Deepens promote gate to require:
+        Phase 7: Requires:
         - lineage_valid
         - specialization_valid
         - promote_recommendation == "approve"
         - status == "candidate_observed"
+
+        Phase 9: Also checks multi-role review:
+        - No role disagreement (or disagreement resolved to accept)
+        - consensus_status allows promotion
         """
         # Must have explicit approve recommendation
         if comparison_result.get("promote_recommendation") != "approve":
@@ -590,5 +699,22 @@ class Governor:
         # Must have candidate summary present
         if comparison_result.get("candidate_summary") is None:
             return False
+
+        # Phase 9: Check multi-role review for role disagreement
+        multi_role_review = comparison_result.get("multi_role_review", {})
+        if multi_role_review:
+            consensus_status = multi_role_review.get("consensus_status", "")
+            has_disagreement = multi_role_review.get("has_disagreement", False)
+
+            # Disagreement_escalate should not permit promotion unless resolved
+            if consensus_status == "disagreement_escalate" and has_disagreement:
+                # Even with approve recommendation, disagreement blocks promotion
+                return False
+
+            # Only consensus_accept permits promotion
+            if consensus_status not in ("consensus_accept", "escalated_accept"):
+                # Other statuses (consensus_strategy_only, consensus_reject) block promotion
+                if consensus_status in ("consensus_strategy_only", "consensus_reject"):
+                    return False
 
         return True

@@ -96,10 +96,27 @@ class AdapterSelection:
 
 @dataclass
 class ValidationReport:
-    """Validation result for candidate adapter."""
+    """Validation result for candidate adapter with Phase 9 multi-role review.
+
+    Fields:
+        - adapter_id: ID of validated adapter
+        - generation: Generation of validated adapter
+        - passed: Whether validation passed
+        - metric_summary: Detailed metrics from validation
+        - reason: Explanation if validation failed
+        - specialization_summary: Per-specialization status
+        - deliberation_outcome: Phase 8 deliberation result (candidate_ready, etc.)
+        - deliberation_quality: Quality score from deliberation (0.0-1.0)
+        - consensus_status: Phase 9 multi-role review consensus status
+        - has_role_disagreement: Whether roles disagreed during review
+    """
     adapter_id: str
     generation: int
     passed: bool
     metric_summary: dict
     reason: Optional[str] = None
     specialization_summary: Dict[AdapterSpecialization, Dict[str, Any]] = field(default_factory=dict)
+    deliberation_outcome: Optional[str] = None
+    deliberation_quality: Optional[float] = None
+    consensus_status: Optional[str] = None
+    has_role_disagreement: Optional[bool] = None

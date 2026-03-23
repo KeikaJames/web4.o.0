@@ -41,6 +41,12 @@ class Collector:
     def admit_observation(self, observation: dict) -> ObservationType:
         """Classify observation and route to appropriate memory layer.
 
+        Phase 9: Uses multi-role review with consensus detection for routing:
+        - CONSENSUS_ACCEPT / CANDIDATE_READY -> parameter_queue
+        - CONSENSUS_STRATEGY_ONLY / STRATEGY_ONLY -> shared_queue
+        - CONSENSUS_REJECT / REJECT -> explicit_trace
+        - DISAGREEMENT_ESCALATE -> conservative handling (downgrade or reject)
+
         Specialization routing:
         - EXPLICIT_ONLY -> explicit_trace (no parameter layer entry)
         - STRATEGY_ONLY -> strategy_trace + shared_queue (SHARED semantics)
@@ -58,23 +64,104 @@ class Collector:
                 "_specialization_target": AdapterSpecialization.SHARED.value
             })
         else:
-            # PARAMETER_CANDIDATE: optionally enhance via deliberation
-            enhanced_obs = observation
+            # PARAMETER_CANDIDATE: Phase 9 multi-role review screening
             if self.enable_deliberation:
                 deliberation = self._get_deliberation()
                 if deliberation:
                     try:
-                        from .deliberation import DeliberationRequest
-                        request = DeliberationRequest(observation=observation)
-                        result = deliberation.deliberate(request)
-                        # Use synthesized output if accepted
-                        enhanced_obs = result.synthesized_output if result.accepted else observation
-                    except Exception:
-                        pass  # Fallback to original observation
+                        from .deliberation import (
+                            DeliberationOutcome,
+                            ReviewConsensusStatus,
+                        )
 
-            # Route to candidate path with specialization marker
+                        # Phase 9: Use multi-role review instead of single deliberation
+                        review_result = deliberation.multi_role_review(observation)
+
+                        # Phase 9: Route based on consensus status and final outcome
+                        if review_result.consensus_status == ReviewConsensusStatus.CONSENSUS_ACCEPT:
+                            # All roles agree on candidate_ready - high confidence
+                            self.parameter_queue.append({
+                                **observation,
+                                "_specialization_target": AdapterSpecialization.CANDIDATE.value,
+                                "_deliberation_outcome": review_result.final_outcome.value,
+                                "_consensus_status": review_result.consensus_status.value,
+                                "_review_request_id": review_result.request_id,
+                                "_has_disagreement": False,
+                            })
+                        elif review_result.consensus_status == ReviewConsensusStatus.CONSENSUS_STRATEGY_ONLY:
+                            # All roles agree on strategy_only
+                            self.strategy_trace.append(observation)
+                            self.shared_queue.append({
+                                **observation,
+                                "_specialization_target": AdapterSpecialization.SHARED.value,
+                                "_deliberation_outcome": review_result.final_outcome.value,
+                                "_consensus_status": review_result.consensus_status.value,
+                                "_review_request_id": review_result.request_id,
+                            })
+                        elif review_result.consensus_status == ReviewConsensusStatus.DISAGREEMENT_ESCALATE:
+                            # Phase 9: Disagreement - check escalation result
+                            if review_result.escalation_used:
+                                # Escalation attempted - use escalated outcome
+                                if review_result.final_outcome == DeliberationOutcome.CANDIDATE_READY:
+                                    self.parameter_queue.append({
+                                        **observation,
+                                        "_specialization_target": AdapterSpecialization.CANDIDATE.value,
+                                        "_deliberation_outcome": review_result.final_outcome.value,
+                                        "_consensus_status": "escalated_accept",
+                                        "_review_request_id": review_result.request_id,
+                                        "_has_disagreement": True,
+                                        "_escalation_used": True,
+                                    })
+                                elif review_result.final_outcome == DeliberationOutcome.STRATEGY_ONLY:
+                                    self.strategy_trace.append(observation)
+                                    self.shared_queue.append({
+                                        **observation,
+                                        "_specialization_target": AdapterSpecialization.SHARED.value,
+                                        "_deliberation_outcome": review_result.final_outcome.value,
+                                        "_consensus_status": "escalated_strategy",
+                                        "_review_request_id": review_result.request_id,
+                                        "_has_disagreement": True,
+                                        "_escalation_used": True,
+                                    })
+                                else:
+                                    # Escalated to reject
+                                    self.explicit_trace.append({
+                                        **observation,
+                                        "_deliberation_rejected": True,
+                                        "_deliberation_outcome": review_result.final_outcome.value,
+                                        "_consensus_status": "escalated_reject",
+                                        "_review_request_id": review_result.request_id,
+                                        "_has_disagreement": True,
+                                        "_escalation_used": True,
+                                    })
+                            else:
+                                # Fallback due to budget - reject conservatively
+                                self.explicit_trace.append({
+                                    **observation,
+                                    "_deliberation_rejected": True,
+                                    "_deliberation_outcome": review_result.final_outcome.value,
+                                    "_consensus_status": review_result.consensus_status.value,
+                                    "_review_request_id": review_result.request_id,
+                                    "_has_disagreement": True,
+                                    "_fallback_used": True,
+                                })
+                        else:
+                            # CONSENSUS_REJECT or other - reject
+                            self.explicit_trace.append({
+                                **observation,
+                                "_deliberation_rejected": True,
+                                "_deliberation_outcome": review_result.final_outcome.value,
+                                "_consensus_status": review_result.consensus_status.value,
+                                "_review_request_id": review_result.request_id,
+                            })
+                        return obs_type
+                    except Exception:
+                        # Fallback to original behavior on deliberation failure
+                        pass
+
+            # Default routing (no deliberation or fallback)
             self.parameter_queue.append({
-                **enhanced_obs,
+                **observation,
                 "_specialization_target": AdapterSpecialization.CANDIDATE.value
             })
 

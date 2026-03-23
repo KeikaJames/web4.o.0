@@ -87,15 +87,28 @@ class Consolidator:
     def accumulate_observation(self, observation: dict):
         """Add observation to micro-batch buffer.
 
+        Phase 8: Considers deliberation quality scores for weighting.
         Routes to specialization-specific accumulator based on
         _specialization_target marker from Collector.
         """
         target_spec = observation.get("_specialization_target")
+
+        # Phase 8: Extract deliberation quality for weighted accumulation
+        quality_score = observation.get("_quality_score", 1.0)
+        deliberation_outcome = observation.get("_deliberation_outcome", None)
+
+        # Add quality-weighted observation
+        weighted_obs = {
+            **observation,
+            "_accumulation_weight": quality_score,
+            "_deliberation_outcome": deliberation_outcome,
+        }
+
         if target_spec == AdapterSpecialization.SHARED.value:
-            self.shared_accumulator.append(observation)
+            self.shared_accumulator.append(weighted_obs)
         else:
             # Default to candidate path
-            self.micro_batch_buffer.append(observation)
+            self.micro_batch_buffer.append(weighted_obs)
 
     def accumulate_for_specialization(self, observation: dict, specialization: AdapterSpecialization):
         """Explicitly add observation for specific specialization."""
@@ -122,17 +135,26 @@ class Consolidator:
         return sorted_values[lower] * (1.0 - weight) + sorted_values[upper] * weight
 
     def _extract_numeric_summary(self, observations: list) -> list[float]:
-        """Extract deterministic numeric summary from observations."""
+        """Extract deterministic numeric summary from observations.
+
+        Phase 8: Uses deliberation quality scores as accumulation weights.
+        Higher quality observations contribute more to the summary.
+        """
         summary = []
         for obs in observations:
+            # Phase 8: Apply deliberation quality weight if available
+            weight = obs.get("_accumulation_weight", 1.0)
+
+            value = 0.0
             if isinstance(obs.get("data"), (int, float)):
-                summary.append(float(obs["data"]))
+                value = float(obs["data"])
             elif "explicit_feedback" in obs:
-                summary.append(1.0)
+                value = 1.0
             elif "strategy_signal" in obs:
-                summary.append(0.5)
-            else:
-                summary.append(0.0)
+                value = 0.5
+
+            # Weight the value by quality score
+            summary.append(value * weight)
         return summary[:10]
 
     def evolve_micro_batch(self) -> bool:
