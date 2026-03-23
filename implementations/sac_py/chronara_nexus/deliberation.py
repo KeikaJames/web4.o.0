@@ -249,11 +249,20 @@ class Critic:
             }
         if interpretation == "numeric_observation":
             magnitude = proposal.get("magnitude", 0.0)
-            quality = "high" if magnitude > 0.5 else "low"
+            # Phase 9: Three-tier quality for escalation paths
+            if magnitude > 0.6:
+                quality = "high"
+                issues = []
+            elif magnitude > 0.3:
+                quality = "medium"  # Can lead to strategy_only and disagreement
+                issues = ["marginal_magnitude"]
+            else:
+                quality = "low"
+                issues = ["low_magnitude"]
             return {
                 "quality": quality,
                 "confidence": magnitude,
-                "issues": [] if quality == "high" else ["low_magnitude"],
+                "issues": issues,
             }
         elif interpretation in ("explicit_feedback", "strategy_signal"):
             return {

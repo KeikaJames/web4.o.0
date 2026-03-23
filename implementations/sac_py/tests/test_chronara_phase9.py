@@ -146,16 +146,19 @@ def test_bounded_escalation_used_on_disagreement():
     """Phase 9: Disagreement triggers bounded escalation."""
     coordinator = MultiRoleReviewCoordinator(max_budget=2)
 
-    # Marginal quality that might cause disagreement
+    # Marginal quality (0.4) that causes disagreement:
+    # - planner: candidate_ready (numeric_observation)
+    # - critic: strategy_only (medium quality)
+    # - verifier: reject (low confidence)
     observation = {"data": 0.4}
     result = coordinator.review(observation)
 
-    if result.consensus_status == ReviewConsensusStatus.DISAGREEMENT_ESCALATE:
-        assert result.escalation_used is True
-        assert result.budget_consumed == 2
-    else:
-        # Consensus reached, no escalation needed
-        assert result.escalation_used is False
+    # With three different decisions, should escalate
+    assert result.escalation_used is True
+    assert result.budget_consumed == 2
+    # Escalation should downgrade to strategy_only (conservative)
+    assert result.consensus_status == ReviewConsensusStatus.CONSENSUS_STRATEGY_ONLY
+    assert result.final_outcome == DeliberationOutcome.STRATEGY_ONLY
 
 
 def test_fallback_on_budget_exhaustion():
@@ -386,3 +389,114 @@ def test_review_outcome_enum_values():
     assert ReviewConsensusStatus.CONSENSUS_STRATEGY_ONLY.value == "consensus_strategy_only"
     assert ReviewConsensusStatus.CONSENSUS_REJECT.value == "consensus_reject"
     assert ReviewConsensusStatus.DISAGREEMENT_ESCALATE.value == "disagreement_escalate"
+
+
+# ============================================================================
+# Regression Tests for Reported Issues
+# ============================================================================
+
+def test_consensus_reject_blocks_passed_in_validate_from_comparison():
+    """Fix: consensus_reject should block passed=True in validate_from_comparison.
+
+    Issue: validate_from_comparison() didn't check multi_role_review, so
+    consensus_reject could still result in passed=True.
+    """
+    active = AdapterRef("base", 1, AdapterMode.SERVE, AdapterSpecialization.STABLE)
+    governor = Governor(active)
+
+    candidate = AdapterRef("base", 2, AdapterMode.SERVE, AdapterSpecialization.CANDIDATE)
+
+    # All lineage checks pass, but multi_role_review is consensus_reject
+    comparison_result = {
+        "status": "candidate_observed",
+        "promote_recommendation": "approve",
+        "lineage_valid": True,
+        "specialization_valid": True,
+        "output_match": True,
+        "kv_count_match": True,
+        "candidate_summary": {
+            "adapter_id": "base",
+            "generation": 2,
+            "specialization": "candidate",
+        },
+        "multi_role_review": {
+            "consensus_status": "consensus_reject",
+            "has_disagreement": False,
+        },
+    }
+
+    report = governor.validate_from_comparison(candidate, comparison_result)
+
+    # passed should be False because consensus_reject blocks
+    assert report.passed is False
+    assert report.metric_summary.get("has_role_disagreement") is False
+
+
+def test_disagreement_escalate_blocks_passed_in_validate_from_comparison():
+    """Fix: disagreement_escalate should block passed=True in validate_from_comparison.
+
+    Issue: validate_from_comparison() didn't check multi_role_review, so
+    disagreement_escalate could still result in passed=True.
+    """
+    active = AdapterRef("base", 1, AdapterMode.SERVE, AdapterSpecialization.STABLE)
+    governor = Governor(active)
+
+    candidate = AdapterRef("base", 2, AdapterMode.SERVE, AdapterSpecialization.CANDIDATE)
+
+    # All lineage checks pass, but multi_role_review is disagreement_escalate
+    comparison_result = {
+        "status": "candidate_observed",
+        "promote_recommendation": "approve",
+        "lineage_valid": True,
+        "specialization_valid": True,
+        "output_match": True,
+        "kv_count_match": True,
+        "candidate_summary": {
+            "adapter_id": "base",
+            "generation": 2,
+            "specialization": "candidate",
+        },
+        "multi_role_review": {
+            "consensus_status": "disagreement_escalate",
+            "has_disagreement": True,
+        },
+    }
+
+    report = governor.validate_from_comparison(candidate, comparison_result)
+
+    # passed should be False because disagreement_escalate blocks
+    assert report.passed is False
+    assert report.metric_summary.get("has_role_disagreement") is True
+
+
+def test_active_only_status_blocks_promotion():
+    """Fix: active_only status should not permit promotion.
+
+    Issue: active_only means "no candidate to compare" but was being
+    treated as a valid status for promotion.
+    """
+    active = AdapterRef("base", 1, AdapterMode.SERVE, AdapterSpecialization.STABLE)
+    governor = Governor(active)
+
+    # active_only should block promotion even with approve recommendation
+    comparison_result = {
+        "status": "active_only",
+        "promote_recommendation": "approve",
+        "lineage_valid": True,
+        "specialization_valid": True,
+        "output_match": True,
+        "kv_count_match": True,
+        "candidate_summary": {
+            "adapter_id": "base",
+            "generation": 2,
+            "specialization": "candidate",
+        },
+    }
+
+    can_promote = governor.can_promote_based_on_comparison(comparison_result)
+    assert can_promote is False
+
+    # Also check that passed is False in validation
+    candidate = AdapterRef("base", 2, AdapterMode.SERVE, AdapterSpecialization.CANDIDATE)
+    report = governor.validate_from_comparison(candidate, comparison_result)
+    assert report.passed is False

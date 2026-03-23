@@ -373,6 +373,19 @@ class Governor:
             # Undecided or failed: use heuristic
             is_acceptable = lineage_valid and output_match and kv_count_match
 
+        # Phase 9: Extract multi-role review info for passed determination
+        multi_role_review = comparison_result.get("multi_role_review", {})
+        consensus_status = multi_role_review.get("consensus_status", "")
+        has_disagreement = multi_role_review.get("has_disagreement", False)
+
+        # Multi-role review blocks: consensus_reject or disagreement_escalate blocks passed
+        multi_role_blocks = False
+        if multi_role_review:
+            if consensus_status == "consensus_reject":
+                multi_role_blocks = True
+            elif consensus_status == "disagreement_escalate" and has_disagreement:
+                multi_role_blocks = True
+
         # Promote gate decision (Phase 7 deepening with backward compatibility)
         # If using old format (no status field), fall back to basic checks
         has_new_format = "status" in comparison_result
@@ -383,11 +396,12 @@ class Governor:
                 and is_acceptable
                 and generation_advanced
                 and promote_rec != "reject"
-                and status not in ("lineage_mismatch", "specialization_mismatch", "unavailable")
+                and status not in ("lineage_mismatch", "specialization_mismatch", "unavailable", "active_only")
+                and not multi_role_blocks  # Phase 9: multi-role review can block
             )
         else:
             # Backward compatibility: old format
-            passed = lineage_valid and is_acceptable and generation_advanced
+            passed = lineage_valid and is_acceptable and generation_advanced and not multi_role_blocks
 
         # Build comprehensive metric summary
         metric_summary = {
@@ -473,7 +487,8 @@ class Governor:
         # Phase 9: Add multi-role review fields to metric_summary
         if consensus_status:
             metric_summary["consensus_status"] = consensus_status
-        if has_disagreement:
+        if multi_role_review:
+            # Always include has_role_disagreement if multi_role_review is present
             metric_summary["has_role_disagreement"] = has_disagreement
 
         # Phase 9: Extract consensus info for ValidationReport
@@ -692,8 +707,9 @@ class Governor:
             return False
 
         # Status must indicate successful observation
+        # Phase 9: active_only means "no candidate to compare" - should NOT permit promotion
         status = comparison_result.get("status", "")
-        if status not in ("candidate_observed", "active_only"):
+        if status != "candidate_observed":
             return False
 
         # Must have candidate summary present
