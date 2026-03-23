@@ -196,9 +196,15 @@ pub fn dispatch_shadow(
     }
     let shadow_resp = dispatch(backend, shadow_req)?;
 
+    // Extract specialization info for comparison
+    let active_spec = active_resp.exec_response.adapter_specialization.clone();
+    let candidate_spec = shadow_resp.exec_response.adapter_specialization.clone();
+
     let comparison = ComparisonResult::compare(
         active_resp.exec_response.clone(),
         shadow_resp.exec_response.clone(),
+        active_spec,
+        candidate_spec,
     );
 
     // Generate validation result from shadow comparison

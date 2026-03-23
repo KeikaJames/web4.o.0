@@ -1,7 +1,53 @@
 """Governor: Validation, promotion, and rollback protocol."""
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from .types import AdapterRef, ValidationReport, AdapterMode, AdapterSpecialization, AdapterSelection
+
+
+class ValidationTrace:
+    """Minimal trace for validation/shadow execution.
+
+    Records:
+    - active adapter identity
+    - candidate adapter identity
+    - specialization combination
+    - comparison result
+    - fail/approve reason
+    """
+    def __init__(
+        self,
+        active: AdapterRef,
+        candidate: Optional[AdapterRef],
+        status: str,
+        passed: bool,
+        reason: Optional[str] = None,
+    ):
+        self.active_id = active.adapter_id
+        self.active_generation = active.generation
+        self.active_specialization = active.specialization
+        self.candidate_id = candidate.adapter_id if candidate else None
+        self.candidate_generation = candidate.generation if candidate else None
+        self.candidate_specialization = candidate.specialization if candidate else None
+        self.status = status
+        self.passed = passed
+        self.reason = reason
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "active": {
+                "id": self.active_id,
+                "generation": self.active_generation,
+                "specialization": self.active_specialization.value,
+            },
+            "candidate": {
+                "id": self.candidate_id,
+                "generation": self.candidate_generation,
+                "specialization": self.candidate_specialization.value if self.candidate_specialization else None,
+            } if self.candidate_id else None,
+            "status": self.status,
+            "passed": self.passed,
+            "reason": self.reason,
+        }
 
 
 class Governor:
@@ -28,6 +74,7 @@ class Governor:
         self.last_validation_report: Optional[ValidationReport] = None
         self.enable_deliberation = enable_deliberation
         self._deliberation = None
+        self._validation_traces: List[ValidationTrace] = []
 
     def get_adapter_selection(self) -> AdapterSelection:
         """Get current specialization-aware adapter selection."""
@@ -210,7 +257,14 @@ class Governor:
         return self.validate_from_atom_result(candidate, atom_result)
 
     def validate_from_comparison(self, candidate: AdapterRef, comparison_result: Dict[str, Any]) -> ValidationReport:
-        """Validate candidate using shadow comparison result."""
+        """Validate candidate using shadow comparison result with Phase 7 deepening.
+
+        Consumes structured comparison result including:
+        - status (active_only, candidate_observed, lineage_mismatch, etc.)
+        - promote_recommendation (approve, reject, undecided, failed)
+        - active_summary / candidate_summary with specialization
+        - lineage_valid, specialization_valid flags
+        """
         # Ensure candidate has CANDIDATE specialization
         candidate = AdapterRef(
             adapter_id=candidate.adapter_id,
@@ -219,44 +273,103 @@ class Governor:
             specialization=AdapterSpecialization.CANDIDATE
         )
         self.candidate_adapter = candidate
+
+        # Extract Phase 7 comparison fields
+        status = comparison_result.get("status", "unknown")
+        promote_rec = comparison_result.get("promote_recommendation", "undecided")
+
+        # Extract adapter summaries if present
+        active_summary = comparison_result.get("active_summary", {})
+        candidate_summary = comparison_result.get("candidate_summary")
+
+        # Core validation checks
         lineage_valid = comparison_result.get("lineage_valid", False)
+        specialization_valid = comparison_result.get("specialization_valid", False)
         output_match = comparison_result.get("output_match", False)
         kv_count_match = comparison_result.get("kv_count_match", False)
         generation_advanced = candidate.generation > self.active_adapter.generation
+
+        # Determine acceptability based on Phase 7 fields (with backward compatibility)
         if "is_acceptable" in comparison_result:
-            is_acceptable = (
-                comparison_result["is_acceptable"]
-                and output_match
-                and kv_count_match
-            )
+            # Old format: use explicit is_acceptable
+            is_acceptable = comparison_result["is_acceptable"] and output_match and kv_count_match
+        elif promote_rec == "approve":
+            is_acceptable = lineage_valid and specialization_valid and output_match and kv_count_match
+        elif promote_rec == "reject":
+            is_acceptable = False
         else:
+            # Undecided or failed: use heuristic
             is_acceptable = lineage_valid and output_match and kv_count_match
 
-        # Strict: must have valid lineage and acceptable behavior
-        passed = lineage_valid and is_acceptable and generation_advanced
+        # Promote gate decision (Phase 7 deepening with backward compatibility)
+        # If using old format (no status field), fall back to basic checks
+        has_new_format = "status" in comparison_result
+        if has_new_format:
+            passed = (
+                lineage_valid
+                and specialization_valid
+                and is_acceptable
+                and generation_advanced
+                and promote_rec != "reject"
+                and status not in ("lineage_mismatch", "specialization_mismatch", "unavailable")
+            )
+        else:
+            # Backward compatibility: old format
+            passed = lineage_valid and is_acceptable and generation_advanced
 
+        # Build comprehensive metric summary
         metric_summary = {
             "lineage_valid": lineage_valid,
+            "specialization_valid": specialization_valid,
             "output_match": output_match,
             "kv_count_match": kv_count_match,
             "is_acceptable": is_acceptable,
             "generation_advanced": generation_advanced,
+            "status": status,
+            "promote_recommendation": promote_rec,
+            "source": "shadow_comparison",
         }
 
+        # Add adapter identity info if available
+        if active_summary:
+            metric_summary["active_identity"] = {
+                "adapter_id": active_summary.get("adapter_id"),
+                "generation": active_summary.get("generation"),
+                "specialization": active_summary.get("specialization"),
+            }
+        if candidate_summary:
+            metric_summary["candidate_identity"] = {
+                "adapter_id": candidate_summary.get("adapter_id"),
+                "generation": candidate_summary.get("generation"),
+                "specialization": candidate_summary.get("specialization"),
+            }
+
+        # Determine reason for failure
         reason = None
         if not passed:
             if not lineage_valid:
                 reason = "adapter lineage invalid"
+            elif has_new_format and not specialization_valid:
+                reason = "specialization mismatch"
+            elif has_new_format and status == "lineage_mismatch":
+                reason = "lineage mismatch detected"
+            elif has_new_format and status == "specialization_mismatch":
+                reason = "specialization chain invalid"
             elif not is_acceptable:
                 reason = "shadow behavior not acceptable"
             elif not generation_advanced:
                 reason = "generation not advanced"
+            elif has_new_format and promote_rec == "reject":
+                reason = "promote recommendation is reject"
+            else:
+                reason = "validation failed"
 
         # Build specialization-aware summary
         specialization_summary = {
             AdapterSpecialization.CANDIDATE: {
                 "status": "validated" if passed else "rejected",
                 "generation": candidate.generation,
+                "specialization_valid": specialization_valid,
             },
             AdapterSpecialization.STABLE: {
                 "generation": self.stable_adapter.generation if self.stable_adapter else None,
@@ -278,6 +391,17 @@ class Governor:
             specialization_summary=specialization_summary
         )
         self.last_validation_report = report
+
+        # Record validation trace (Phase 7)
+        trace = ValidationTrace(
+            active=self.active_adapter,
+            candidate=candidate,
+            status=status,
+            passed=passed,
+            reason=reason,
+        )
+        self._validation_traces.append(trace)
+
         return report
 
     def validate_candidate(self, candidate: AdapterRef) -> ValidationReport:
@@ -424,3 +548,47 @@ class Governor:
         """Compute drift score for future gamma adjustment."""
         # Placeholder for future dynamic learning rate scheduling
         return 0.0
+
+    def get_validation_traces(self) -> List[ValidationTrace]:
+        """Get all validation traces recorded."""
+        return self._validation_traces.copy()
+
+    def get_last_validation_trace(self) -> Optional[ValidationTrace]:
+        """Get the most recent validation trace."""
+        if self._validation_traces:
+            return self._validation_traces[-1]
+        return None
+
+    def clear_validation_traces(self):
+        """Clear all validation traces."""
+        self._validation_traces.clear()
+
+    def can_promote_based_on_comparison(self, comparison_result: Dict[str, Any]) -> bool:
+        """Check if comparison result permits promotion (Phase 7 gate).
+
+        Deepens promote gate to require:
+        - lineage_valid
+        - specialization_valid
+        - promote_recommendation == "approve"
+        - status == "candidate_observed"
+        """
+        # Must have explicit approve recommendation
+        if comparison_result.get("promote_recommendation") != "approve":
+            return False
+
+        # Must have valid lineage and specialization
+        if not comparison_result.get("lineage_valid", False):
+            return False
+        if not comparison_result.get("specialization_valid", False):
+            return False
+
+        # Status must indicate successful observation
+        status = comparison_result.get("status", "")
+        if status not in ("candidate_observed", "active_only"):
+            return False
+
+        # Must have candidate summary present
+        if comparison_result.get("candidate_summary") is None:
+            return False
+
+        return True

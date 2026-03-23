@@ -64,4 +64,12 @@ fn test_dispatch_shadow_dual_path() {
     assert_eq!(comparison.shadow_response.adapter_generation, Some(2));
     assert!(comparison.lineage_valid);
     assert!(comparison.is_acceptable);
+
+    // Phase 7: Check new comparison fields
+    assert_eq!(comparison.status, ulp_atom_kernel::shadow::ComparisonStatus::CandidateObserved);
+    assert!(comparison.specialization_valid);
+    assert_eq!(comparison.active_summary.generation, 1);
+    assert_eq!(comparison.candidate_summary.as_ref().map(|s| s.generation), Some(2));
+    assert_eq!(comparison.promote_recommendation, ulp_atom_kernel::shadow::PromoteRecommendation::Approve);
+    assert!(comparison.can_promote());
 }
