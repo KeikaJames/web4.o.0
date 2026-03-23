@@ -1,16 +1,26 @@
 """Collector: observation classification and in-memory routing."""
 
+from typing import Optional
 from .types import AdapterRef, ObservationType
 
 
 class Collector:
     """Classify observations and route them into in-memory traces."""
 
-    def __init__(self, active_adapter: AdapterRef):
+    def __init__(self, active_adapter: AdapterRef, enable_deliberation: bool = False):
         self.active_adapter = active_adapter
         self.explicit_trace = []
         self.strategy_trace = []
         self.parameter_queue = []
+        self.enable_deliberation = enable_deliberation
+        self._deliberation = None
+
+    def _get_deliberation(self):
+        """Lazy load deliberation to avoid circular import."""
+        if self._deliberation is None and self.enable_deliberation:
+            from .deliberation import BoundedDeliberation
+            self._deliberation = BoundedDeliberation()
+        return self._deliberation
 
     @staticmethod
     def classify(observation: dict) -> ObservationType:
@@ -30,7 +40,24 @@ class Collector:
         elif obs_type == ObservationType.STRATEGY_ONLY:
             self.strategy_trace.append(observation)
         else:
-            self.parameter_queue.append(observation)
+            # PARAMETER_CANDIDATE: optionally enhance via deliberation
+            if self.enable_deliberation:
+                deliberation = self._get_deliberation()
+                if deliberation:
+                    try:
+                        from .deliberation import DeliberationRequest
+                        request = DeliberationRequest(observation=observation)
+                        result = deliberation.deliberate(request)
+                        # Use synthesized output if accepted
+                        enhanced_obs = result.synthesized_output if result.accepted else observation
+                        self.parameter_queue.append(enhanced_obs)
+                    except Exception:
+                        # Fallback on deliberation failure
+                        self.parameter_queue.append(observation)
+                else:
+                    self.parameter_queue.append(observation)
+            else:
+                self.parameter_queue.append(observation)
 
         return obs_type
 

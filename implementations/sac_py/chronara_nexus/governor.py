@@ -7,11 +7,20 @@ from .types import AdapterRef, ValidationReport, AdapterMode
 class Governor:
     """Manages active/candidate/stable adapter lifecycle."""
 
-    def __init__(self, initial_adapter: AdapterRef):
+    def __init__(self, initial_adapter: AdapterRef, enable_deliberation: bool = False):
         self.active_adapter = initial_adapter
         self.candidate_adapter: Optional[AdapterRef] = None
         self.stable_adapter = initial_adapter
         self.last_validation_report: Optional[ValidationReport] = None
+        self.enable_deliberation = enable_deliberation
+        self._deliberation = None
+
+    def _get_deliberation(self):
+        """Lazy load deliberation to avoid circular import."""
+        if self._deliberation is None and self.enable_deliberation:
+            from .deliberation import BoundedDeliberation
+            self._deliberation = BoundedDeliberation()
+        return self._deliberation
 
     def create_shadow_request(self, candidate: AdapterRef, input_data: bytes) -> Dict[str, Any]:
         """Create a shadow eval request for candidate adapter."""
@@ -33,6 +42,35 @@ class Governor:
     def validate_from_atom_result(self, candidate: AdapterRef, atom_result: Dict[str, Any]) -> ValidationReport:
         """Validate candidate using atom validation_result."""
         self.candidate_adapter = candidate
+
+        # Optional deliberation pre-processing
+        if self.enable_deliberation:
+            deliberation = self._get_deliberation()
+            if deliberation:
+                try:
+                    from .deliberation import DeliberationRequest
+                    # Create deliberation input from atom_result
+                    delib_obs = {
+                        "atom_result": atom_result,
+                        "candidate_id": candidate.adapter_id,
+                        "candidate_generation": candidate.generation,
+                    }
+                    request = DeliberationRequest(observation=delib_obs)
+                    result = deliberation.deliberate(request)
+                    # If deliberation rejects, mark as failed
+                    if not result.accepted:
+                        report = ValidationReport(
+                            adapter_id=candidate.adapter_id,
+                            generation=candidate.generation,
+                            passed=False,
+                            metric_summary={"source": "deliberation_rejected"},
+                            reason="deliberation quality check failed"
+                        )
+                        self.last_validation_report = report
+                        return report
+                except Exception:
+                    # Fallback on deliberation failure
+                    pass
 
         # Check if atom returned validation_result
         validation_result = atom_result.get("validation_result")
