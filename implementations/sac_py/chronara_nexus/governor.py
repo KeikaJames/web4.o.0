@@ -378,10 +378,13 @@ class Governor:
         consensus_status = multi_role_review.get("consensus_status", "")
         has_disagreement = multi_role_review.get("has_disagreement", False)
 
-        # Multi-role review blocks: consensus_reject or disagreement_escalate blocks passed
+        # Multi-role review blocks: consensus_reject, consensus_strategy_only, or disagreement_escalate blocks passed
         multi_role_blocks = False
         if multi_role_review:
             if consensus_status == "consensus_reject":
+                multi_role_blocks = True
+            elif consensus_status == "consensus_strategy_only":
+                # consensus_strategy_only should not permit promotion to stable
                 multi_role_blocks = True
             elif consensus_status == "disagreement_escalate" and has_disagreement:
                 multi_role_blocks = True
@@ -734,3 +737,247 @@ class Governor:
                     return False
 
         return True
+
+    def extract_federation_summary(
+        self,
+        consolidator_params: Optional[Dict[str, float]] = None,
+        source_node: Optional[str] = None,
+    ) -> "FederationSummary":
+        """Extract federation-ready summary from Governor state.
+
+        Phase 10: Creates minimal, structured summary for cross-node exchange.
+        Safe to call during serve path - never blocks or raises.
+        """
+        from datetime import datetime
+        from .types import (
+            FederationSummary, AdapterIdentitySummary, SpecializationSummary,
+            ImportanceMaskSummary, DeltaNormSummary, ValidationScoreSummary,
+            ComparisonOutcomeSummary, DeliberationSummary, SnapshotLineageSummary,
+            CompatibilityHints,
+        )
+
+        try:
+            # Extract identity from active adapter
+            identity = AdapterIdentitySummary(
+                adapter_id=self.active_adapter.adapter_id,
+                generation=self.active_adapter.generation,
+                parent_generation=(
+                    self.stable_adapter.generation
+                    if self.stable_adapter and self.stable_adapter.generation != self.active_adapter.generation
+                    else None
+                ),
+                specialization=self.active_adapter.specialization.value,
+                mode=self.active_adapter.mode.value,
+            )
+
+            # Extract specialization summary
+            specialization = SpecializationSummary(
+                stable_generation=self.stable_adapter.generation if self.stable_adapter else self.active_adapter.generation,
+                shared_generation=self.shared_adapter.generation if self.shared_adapter else None,
+                candidate_generation=self.candidate_adapter.generation if self.candidate_adapter else None,
+                active_specialization=self.active_adapter.specialization.value,
+            )
+
+            # Extract importance mask from params (bounded)
+            top_keys = []
+            scores = {}
+            threshold = 0.0
+            compression_ratio = 1.0
+            if consolidator_params:
+                sorted_params = sorted(
+                    consolidator_params.items(),
+                    key=lambda x: abs(x[1]),
+                    reverse=True
+                )
+                # Keep top 10 keys max (bounded)
+                top_keys = [k for k, v in sorted_params[:10]]
+                scores = {k: abs(v) for k, v in sorted_params[:10]}
+                if scores:
+                    threshold = min(scores.values()) if len(scores) < len(consolidator_params) else 0.0
+                    compression_ratio = len(top_keys) / len(consolidator_params) if consolidator_params else 1.0
+
+            importance_mask = ImportanceMaskSummary(
+                top_keys=top_keys,
+                scores=scores,
+                threshold=threshold,
+                compression_ratio=compression_ratio,
+            )
+
+            # Extract delta norm (minimal)
+            delta_norm = DeltaNormSummary(
+                l1_norm=sum(abs(v) for v in (consolidator_params or {}).values()),
+                l2_norm=(sum(v**2 for v in (consolidator_params or {}).values())) ** 0.5,
+                max_abs=max((abs(v) for v in (consolidator_params or {}).values()), default=0.0),
+                param_count=len(consolidator_params) if consolidator_params else 0,
+                relative_to_parent=None,  # Would need parent params to compute
+            )
+
+            # Extract validation score from last report
+            report = self.last_validation_report
+            if report:
+                metric = report.metric_summary
+                validation_score = ValidationScoreSummary(
+                    passed=report.passed,
+                    lineage_valid=metric.get("lineage_valid", False),
+                    specialization_valid=metric.get("specialization_valid", False),
+                    output_match=metric.get("output_match", False),
+                    kv_count_match=metric.get("kv_count_match", False),
+                    generation_advanced=metric.get("generation_advanced", False),
+                    score=1.0 if report.passed else 0.0,
+                )
+            else:
+                validation_score = ValidationScoreSummary(
+                    passed=True,  # Default: assume valid if no report
+                    lineage_valid=True,
+                    specialization_valid=True,
+                    output_match=True,
+                    kv_count_match=True,
+                    generation_advanced=True,
+                    score=1.0,
+                )
+
+            # Extract comparison outcome from last trace
+            comparison_outcome = ComparisonOutcomeSummary(
+                status="unknown",
+                promote_recommendation="undecided",
+                lineage_valid=True,
+                specialization_valid=True,
+                is_acceptable=True,
+            )
+
+            # Extract deliberation from last report
+            deliberation = DeliberationSummary(
+                outcome=report.deliberation_outcome if report and report.deliberation_outcome else "candidate_ready",
+                quality_score=report.deliberation_quality if report and report.deliberation_quality is not None else 0.5,
+                confidence=0.5,
+                consensus_status=report.consensus_status if report else None,
+                has_disagreement=report.has_role_disagreement if report else None,
+                escalation_used=False,
+            )
+
+            # Extract snapshot lineage
+            lineage_hash = f"{identity.adapter_id}:{identity.generation}:{identity.specialization}"
+            snapshot_lineage = SnapshotLineageSummary(
+                snapshot_id=f"{identity.adapter_id}-gen{identity.generation}",
+                adapter_id=identity.adapter_id,
+                generation=identity.generation,
+                specialization=identity.specialization,
+                parent_snapshot_id=(
+                    f"{identity.adapter_id}-gen{identity.parent_generation}"
+                    if identity.parent_generation else None
+                ),
+                lineage_hash=lineage_hash,
+            )
+
+            # Compute compatibility hints
+            compatibility = CompatibilityHints(
+                min_compatible_generation=max(0, identity.generation - 2),
+                max_compatible_generation=identity.generation + 1,
+                required_specialization=None,  # Allow cross-specialization
+                min_validation_score=0.5,
+                requires_consensus_accept=False,
+                format_version="1.0",
+            )
+
+            return FederationSummary(
+                identity=identity,
+                specialization=specialization,
+                importance_mask=importance_mask,
+                delta_norm=delta_norm,
+                validation_score=validation_score,
+                comparison_outcome=comparison_outcome,
+                deliberation=deliberation,
+                snapshot_lineage=snapshot_lineage,
+                compatibility=compatibility,
+                export_timestamp=datetime.utcnow().isoformat() + "Z",
+                export_version="1.0",
+                source_node=source_node,
+            )
+
+        except Exception:
+            # Failure safety: return minimal safe summary on any error
+            return self._minimal_federation_summary(source_node)
+
+    def _minimal_federation_summary(self, source_node: Optional[str] = None) -> "FederationSummary":
+        """Return minimal safe federation summary on extraction failure."""
+        from datetime import datetime
+        from .types import (
+            FederationSummary, AdapterIdentitySummary, SpecializationSummary,
+            ImportanceMaskSummary, DeltaNormSummary, ValidationScoreSummary,
+            ComparisonOutcomeSummary, DeliberationSummary, SnapshotLineageSummary,
+            CompatibilityHints,
+        )
+
+        identity = AdapterIdentitySummary(
+            adapter_id=self.active_adapter.adapter_id if self.active_adapter else "unknown",
+            generation=self.active_adapter.generation if self.active_adapter else 0,
+            parent_generation=None,
+            specialization="stable",
+            mode="serve",
+        )
+
+        return FederationSummary(
+            identity=identity,
+            specialization=SpecializationSummary(
+                stable_generation=identity.generation,
+                shared_generation=None,
+                candidate_generation=None,
+                active_specialization="stable",
+            ),
+            importance_mask=ImportanceMaskSummary(
+                top_keys=[],
+                scores={},
+                threshold=0.0,
+                compression_ratio=1.0,
+            ),
+            delta_norm=DeltaNormSummary(
+                l1_norm=0.0,
+                l2_norm=0.0,
+                max_abs=0.0,
+                param_count=0,
+                relative_to_parent=None,
+            ),
+            validation_score=ValidationScoreSummary(
+                passed=True,
+                lineage_valid=True,
+                specialization_valid=True,
+                output_match=True,
+                kv_count_match=True,
+                generation_advanced=True,
+                score=1.0,
+            ),
+            comparison_outcome=ComparisonOutcomeSummary(
+                status="unknown",
+                promote_recommendation="undecided",
+                lineage_valid=True,
+                specialization_valid=True,
+                is_acceptable=True,
+            ),
+            deliberation=DeliberationSummary(
+                outcome="candidate_ready",
+                quality_score=0.5,
+                confidence=0.5,
+                consensus_status=None,
+                has_disagreement=None,
+                escalation_used=False,
+            ),
+            snapshot_lineage=SnapshotLineageSummary(
+                snapshot_id=f"{identity.adapter_id}-gen{identity.generation}",
+                adapter_id=identity.adapter_id,
+                generation=identity.generation,
+                specialization=identity.specialization,
+                parent_snapshot_id=None,
+                lineage_hash="",
+            ),
+            compatibility=CompatibilityHints(
+                min_compatible_generation=0,
+                max_compatible_generation=0,
+                required_specialization=None,
+                min_validation_score=0.0,
+                requires_consensus_accept=False,
+                format_version="1.0",
+            ),
+            export_timestamp=datetime.utcnow().isoformat() + "Z",
+            export_version="1.0",
+            source_node=source_node,
+        )

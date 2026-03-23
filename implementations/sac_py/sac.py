@@ -582,3 +582,84 @@ class SACContainer:
         if not hasattr(self, '_chronara_governor'):
             self.init_chronara()
         return self._chronara_governor.validate_from_comparison(candidate, comparison_result)
+
+    def extract_federation_summary(self, source_node: Optional[str] = None):
+        """Extract federation-ready summary from all Chronara layers.
+
+        Phase 10: Unified extraction from Governor, Collector, and Consolidator.
+        Safe to call during serve path - never blocks or raises.
+
+        Returns:
+            FederationSummary: Structured summary for cross-node exchange
+        """
+        try:
+            # Initialize if needed
+            if not hasattr(self, '_chronara_governor'):
+                self.init_chronara()
+
+            # Get consolidator params if available
+            consolidator_params = None
+            if hasattr(self, '_chronara_consolidator'):
+                consolidator = self._chronara_consolidator
+                # Use candidate params if available, else stable
+                if consolidator.candidate_adapter:
+                    consolidator_params = consolidator.get_specialization_params(AdapterSpecialization.CANDIDATE)
+                elif consolidator.stable_adapter:
+                    consolidator_params = consolidator.get_specialization_params(AdapterSpecialization.STABLE)
+
+            # Extract from Governor (primary source)
+            summary = self._chronara_governor.extract_federation_summary(
+                consolidator_params=consolidator_params,
+                source_node=source_node,
+            )
+
+            return summary
+
+        except Exception:
+            # Failure safety: return minimal summary
+            from chronara_nexus.types import FederationSummary
+            return FederationSummary._minimal_safe_summary(
+                adapter_id=getattr(self, 'sac_id', 'unknown'),
+                generation=0,
+                source_node=source_node,
+            )
+
+    def extract_chronara_full_summary(self) -> dict:
+        """Extract full layered summary from all Chronara components.
+
+        Phase 10: Combined summary from Governor, Collector, and Consolidator
+        for internal diagnostics and federation preparation.
+
+        Returns:
+            dict: Combined summary from all layers
+        """
+        result = {
+            "federation_summary": None,
+            "observation_summary": None,
+            "parameter_summary": None,
+            "governor_traces": [],
+        }
+
+        try:
+            # Federation summary from Governor
+            if hasattr(self, '_chronara_governor'):
+                summary = self.extract_federation_summary()
+                if summary:
+                    result["federation_summary"] = summary.to_dict()
+                    # Also include validation traces
+                    traces = self._chronara_governor.get_validation_traces()
+                    result["governor_traces"] = [t.to_dict() for t in traces]
+
+            # Observation summary from Collector
+            if hasattr(self, '_chronara_collector'):
+                result["observation_summary"] = self._chronara_collector.extract_observation_summary()
+
+            # Parameter summary from Consolidator
+            if hasattr(self, '_chronara_consolidator'):
+                result["parameter_summary"] = self._chronara_consolidator.extract_parameter_summary()
+
+        except Exception:
+            # Failure safety: return what we have
+            pass
+
+        return result

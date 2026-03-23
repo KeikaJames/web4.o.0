@@ -246,3 +246,77 @@ class Consolidator:
             byte_size=0,
             specialization=specialization
         )
+
+    def extract_parameter_summary(self) -> dict:
+        """Extract parameter-side summary for federation.
+
+        Phase 10: Minimal delta-side summary for cross-node comparison.
+        """
+        try:
+            # Get params for all specializations
+            candidate_params = self.get_specialization_params(AdapterSpecialization.CANDIDATE)
+            shared_params = self.get_specialization_params(AdapterSpecialization.SHARED)
+            stable_params = self.get_specialization_params(AdapterSpecialization.STABLE)
+
+            # Compute norms
+            def compute_norms(params: dict) -> dict:
+                if not params:
+                    return {"l1": 0.0, "l2": 0.0, "max": 0.0, "count": 0}
+                values = list(params.values())
+                return {
+                    "l1": sum(abs(v) for v in values),
+                    "l2": (sum(v**2 for v in values)) ** 0.5,
+                    "max": max(abs(v) for v in values),
+                    "count": len(values),
+                }
+
+            # Get top-k important keys per specialization
+            def get_top_keys(params: dict, k: int = 5) -> list:
+                if not params:
+                    return []
+                sorted_items = sorted(params.items(), key=lambda x: abs(x[1]), reverse=True)
+                return [k for k, v in sorted_items[:k]]
+
+            return {
+                "specializations": {
+                    "candidate": {
+                        "exists": self.candidate_adapter is not None,
+                        "generation": self.candidate_adapter.generation if self.candidate_adapter else None,
+                        "norms": compute_norms(candidate_params),
+                        "top_keys": get_top_keys(candidate_params),
+                    },
+                    "shared": {
+                        "exists": self.shared_adapter is not None,
+                        "generation": self.shared_adapter.generation if self.shared_adapter else None,
+                        "norms": compute_norms(shared_params),
+                        "top_keys": get_top_keys(shared_params),
+                    },
+                    "stable": {
+                        "exists": self.stable_adapter is not None,
+                        "generation": self.stable_adapter.generation if self.stable_adapter else None,
+                        "norms": compute_norms(stable_params),
+                        "top_keys": get_top_keys(stable_params),
+                    },
+                },
+                "buffer_sizes": {
+                    "micro_batch": len(self.micro_batch_buffer),
+                    "shared_accumulator": len(self.shared_accumulator),
+                },
+                "hyperparameters": {
+                    "lr": self.lr,
+                    "gamma": self.gamma,
+                },
+            }
+        except Exception:
+            # Failure safety: return minimal summary
+            return {
+                "specializations": {},
+                "buffer_sizes": {
+                    "micro_batch": 0,
+                    "shared_accumulator": 0,
+                },
+                "hyperparameters": {
+                    "lr": self.lr,
+                    "gamma": self.gamma,
+                },
+            }

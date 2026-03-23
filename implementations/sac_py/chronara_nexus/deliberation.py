@@ -306,9 +306,13 @@ class Verifier:
 
         # Determine outcome based on quality and observation type
         if quality == "high" and len(issues) == 0 and confidence > 0.6:
-            # High quality -> candidate_ready
-            outcome = DeliberationOutcome.CANDIDATE_READY
-            reason = "high_quality_candidate"
+            # High quality, but explicit_feedback should not enter parameter layer
+            if interpretation == "explicit_feedback":
+                outcome = DeliberationOutcome.STRATEGY_ONLY
+                reason = "explicit_feedback_high_quality"
+            else:
+                outcome = DeliberationOutcome.CANDIDATE_READY
+                reason = "high_quality_candidate"
         elif quality == "high" and confidence > 0.4:
             # Medium-high quality with strategy signal -> strategy_only
             if interpretation in ("strategy_signal", "explicit_feedback"):

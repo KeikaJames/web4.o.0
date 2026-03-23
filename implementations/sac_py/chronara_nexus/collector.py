@@ -194,3 +194,56 @@ class Collector:
             self.shared_queue.clear()
         elif specialization == AdapterSpecialization.CANDIDATE:
             self.parameter_queue.clear()
+
+    def extract_observation_summary(self) -> dict:
+        """Extract observation routing summary for federation.
+
+        Phase 10: Minimal summary of observation quality and routing.
+        """
+        try:
+            # Count observations by type
+            explicit_count = len(self.explicit_trace)
+            strategy_count = len(self.strategy_trace)
+            parameter_count = len(self.parameter_queue)
+            shared_count = len(self.shared_queue)
+
+            # Extract deliberation outcomes if available
+            deliberation_outcomes = {}
+            for obs in self.parameter_queue:
+                outcome = obs.get("_deliberation_outcome")
+                if outcome:
+                    deliberation_outcomes[outcome] = deliberation_outcomes.get(outcome, 0) + 1
+
+            for obs in self.shared_queue:
+                outcome = obs.get("_deliberation_outcome")
+                if outcome:
+                    deliberation_outcomes[outcome] = deliberation_outcomes.get(outcome, 0) + 1
+
+            # Count consensus statuses
+            consensus_statuses = {}
+            for obs in self.parameter_queue + self.shared_queue:
+                status = obs.get("_consensus_status")
+                if status:
+                    consensus_statuses[status] = consensus_statuses.get(status, 0) + 1
+
+            return {
+                "observation_counts": {
+                    "explicit_only": explicit_count,
+                    "strategy_only": strategy_count,
+                    "parameter_candidate": parameter_count,
+                    "shared": shared_count,
+                },
+                "deliberation_outcomes": deliberation_outcomes,
+                "consensus_statuses": consensus_statuses,
+                "total_observations": explicit_count + strategy_count + parameter_count + shared_count,
+                "has_deliberation": self.enable_deliberation,
+            }
+        except Exception:
+            # Failure safety: return minimal summary
+            return {
+                "observation_counts": {},
+                "deliberation_outcomes": {},
+                "consensus_statuses": {},
+                "total_observations": 0,
+                "has_deliberation": self.enable_deliberation,
+            }
