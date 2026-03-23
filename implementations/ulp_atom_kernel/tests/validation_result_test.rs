@@ -63,3 +63,19 @@ fn test_validation_result_shadow_eval_kv_mismatch() {
     assert!(result.lineage_valid);
     assert!(!result.is_acceptable); // Not acceptable due to kv mismatch
 }
+
+#[test]
+fn test_validation_result_shadow_eval_output_mismatch() {
+    let result = ValidationResult::shadow_eval(
+        "adapter-1".to_string(),
+        1,
+        "adapter-1".to_string(),
+        2,
+        true,
+        false, // output_match = false
+        true,
+    );
+
+    assert!(result.lineage_valid);
+    assert!(!result.is_acceptable);
+}

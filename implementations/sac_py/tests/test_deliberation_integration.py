@@ -107,12 +107,10 @@ def test_governor_with_deliberation_rejects():
         }
     }
 
-    # With deliberation, low quality input might be rejected
-    # (In this test, deliberation will accept since atom_result is valid)
     report = governor.validate_from_atom_result(candidate, atom_result)
 
-    # Should still pass since atom result is valid
-    assert report.passed or report.metric_summary.get("source") == "deliberation_rejected"
+    assert report.passed
+    assert report.metric_summary["source"] == "atom_validation_result"
 
 
 def test_governor_without_deliberation():

@@ -22,6 +22,24 @@ pub struct ExecResponse {
     pub adapter_id: Option<String>,
     #[serde(default)]
     pub adapter_generation: Option<u64>,
+    /// Adapter specialization for lineage tracking.
+    #[serde(default)]
+    pub adapter_specialization: Option<crate::adapter::AdapterSpecialization>,
+    /// Specialization-aware summary if available.
+    #[serde(default)]
+    pub specialization_summary: Option<SpecializationSummary>,
+}
+
+/// Minimal specialization-aware summary for exec response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpecializationSummary {
+    pub stable_generation: u64,
+    #[serde(default)]
+    pub shared_generation: Option<u64>,
+    #[serde(default)]
+    pub candidate_generation: Option<u64>,
+    #[serde(default)]
+    pub stable_adapter_id: String,
 }
 
 /// The kernel's execution-facing boundary.

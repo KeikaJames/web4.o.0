@@ -210,12 +210,12 @@ impl HomeNode {
             }
         }
 
-        let (adapter_id, adapter_generation) = adapter_context
+        let (adapter_id, adapter_generation, adapter_specialization) = adapter_context
             .map(|ctx| {
                 let adapter = ctx.resolve_adapter();
-                (Some(adapter.adapter_id.clone()), Some(adapter.generation))
+                (Some(adapter.adapter_id.clone()), Some(adapter.generation), Some(adapter.specialization.clone()))
             })
-            .unwrap_or((None, None));
+            .unwrap_or((None, None, None));
 
         let prefill_receipt = PrefillReceipt {
             atom_id: prefill_atom.id.clone(),
@@ -234,6 +234,7 @@ impl HomeNode {
                 handoff_id: Some(format!("{}:prefill", prefill_atom.id)),
                 adapter_id: adapter_id.clone(),
                 adapter_generation,
+                adapter_specialization: adapter_specialization.clone(),
             },
             kv_handoff: KVHandoff {
                 source_stage: "prefill".to_string(),
@@ -245,6 +246,7 @@ impl HomeNode {
                     ownership_hint: Some(self.node_id.clone()),
                     migration_hint: None,
                     adapter_generation,
+                    adapter_specialization: adapter_specialization.clone(),
                 },
             },
             prefill_output: prefill_real_output.clone(),
@@ -683,6 +685,7 @@ impl HomeNode {
                             handoff_id: handoff_id.map(|s| s.to_string()),
                             adapter_id: None,
                             adapter_generation: None,
+                            adapter_specialization: None,
                         },
                     });
                 }
@@ -944,6 +947,9 @@ pub struct KVHandoffMetadata {
     /// Adapter generation for lineage tracking.
     #[serde(default)]
     pub adapter_generation: Option<u64>,
+    /// Adapter specialization for specialization-aware routing.
+    #[serde(default)]
+    pub adapter_specialization: Option<crate::adapter::AdapterSpecialization>,
 }
 
 impl KVHandoffMetadata {
@@ -958,6 +964,7 @@ impl KVHandoffMetadata {
             ownership_hint: None,
             migration_hint: None,
             adapter_generation: None,
+            adapter_specialization: None,
         }
     }
 
@@ -978,6 +985,7 @@ impl KVHandoffMetadata {
             ownership_hint: Some(owner_node_id),
             migration_hint,
             adapter_generation: None,
+            adapter_specialization: None,
         }
     }
 }
@@ -991,6 +999,7 @@ impl Default for KVHandoffMetadata {
             ownership_hint: None,
             migration_hint: None,
             adapter_generation: None,
+            adapter_specialization: None,
         }
     }
 }
@@ -1055,6 +1064,9 @@ pub struct StageReceipt {
     pub adapter_id: Option<String>,
     #[serde(default)]
     pub adapter_generation: Option<u64>,
+    /// Adapter specialization for specialization-aware lineage.
+    #[serde(default)]
+    pub adapter_specialization: Option<crate::adapter::AdapterSpecialization>,
 }
 
 impl StageReceipt {
@@ -1100,6 +1112,14 @@ impl StageReceipt {
             return Err(format!(
                 "adapter generation mismatch: receipt {:?} != handoff {:?}",
                 self.adapter_generation, handoff.metadata.adapter_generation
+            ));
+        }
+
+        // Verify specialization consistency
+        if self.adapter_specialization != handoff.metadata.adapter_specialization {
+            return Err(format!(
+                "adapter specialization mismatch: receipt {:?} != handoff {:?}",
+                self.adapter_specialization, handoff.metadata.adapter_specialization
             ));
         }
 

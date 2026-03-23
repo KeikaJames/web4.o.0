@@ -30,6 +30,27 @@ class Planner:
     @staticmethod
     def propose(observation: Dict[str, Any]) -> Dict[str, Any]:
         """Generate proposal from observation."""
+        validation_result = None
+        if isinstance(observation.get("validation_result"), dict):
+            validation_result = observation["validation_result"]
+        elif isinstance(observation.get("atom_result"), dict):
+            nested = observation["atom_result"].get("validation_result")
+            if isinstance(nested, dict):
+                validation_result = nested
+
+        if validation_result is not None:
+            lineage_valid = bool(validation_result.get("lineage_valid", False))
+            output_match = bool(validation_result.get("output_match", False))
+            kv_count_match = bool(validation_result.get("kv_count_match", False))
+            confidence = sum((lineage_valid, output_match, kv_count_match)) / 3.0
+            return {
+                "interpretation": "atom_validation_result",
+                "lineage_valid": lineage_valid,
+                "output_match": output_match,
+                "kv_count_match": kv_count_match,
+                "confidence": confidence,
+            }
+
         # Extract numeric features
         if isinstance(observation.get("data"), (int, float)):
             value = float(observation["data"])
@@ -64,6 +85,20 @@ class Critic:
         """Review proposal quality."""
         interpretation = proposal.get("interpretation", "unknown")
 
+        if interpretation == "atom_validation_result":
+            issues = []
+            if not proposal.get("lineage_valid", False):
+                issues.append("lineage_invalid")
+            if not proposal.get("output_match", False):
+                issues.append("output_mismatch")
+            if not proposal.get("kv_count_match", False):
+                issues.append("kv_mismatch")
+            quality = "high" if not issues else "low"
+            return {
+                "quality": quality,
+                "confidence": proposal.get("confidence", 0.0),
+                "issues": issues,
+            }
         if interpretation == "numeric_observation":
             magnitude = proposal.get("magnitude", 0.0)
             quality = "high" if magnitude > 0.5 else "low"

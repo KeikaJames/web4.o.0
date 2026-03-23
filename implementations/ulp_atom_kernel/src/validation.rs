@@ -47,7 +47,7 @@ impl ValidationResult {
         output_match: bool,
         kv_count_match: bool,
     ) -> Self {
-        let is_acceptable = lineage_valid && kv_count_match;
+        let is_acceptable = lineage_valid && output_match && kv_count_match;
         Self {
             active_adapter_id: active_id,
             active_generation: active_gen,

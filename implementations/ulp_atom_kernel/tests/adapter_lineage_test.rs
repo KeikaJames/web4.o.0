@@ -1,6 +1,6 @@
 //! Test adapter lineage propagation through atom execution.
 
-use ulp_atom_kernel::adapter::{AdapterContext, AdapterMode, AdapterRef};
+use ulp_atom_kernel::adapter::{AdapterContext, AdapterMode, AdapterRef, AdapterSpecialization};
 use ulp_atom_kernel::atom::{AtomKind, ComputeAtom, Region};
 use ulp_atom_kernel::backend::mock::MockBackend;
 use ulp_atom_kernel::kernel::{self, AtomRequest};
@@ -14,8 +14,11 @@ fn test_adapter_context_resolve_active() {
             adapter_id: "active".to_string(),
             generation: 1,
             mode: AdapterMode::Serve,
+            specialization: AdapterSpecialization::Stable,
         },
         candidate_adapter: None,
+        shared_adapter: None,
+        stable_adapter: None,
     };
 
     let resolved = ctx.resolve_adapter();
@@ -30,12 +33,16 @@ fn test_adapter_context_resolve_shadow_eval() {
             adapter_id: "active".to_string(),
             generation: 1,
             mode: AdapterMode::Serve,
+            specialization: AdapterSpecialization::Stable,
         },
         candidate_adapter: Some(AdapterRef {
             adapter_id: "candidate".to_string(),
             generation: 2,
             mode: AdapterMode::ShadowEval,
+            specialization: AdapterSpecialization::Candidate,
         }),
+        shared_adapter: None,
+        stable_adapter: None,
     };
 
     let resolved = ctx.resolve_adapter();
@@ -59,8 +66,11 @@ fn test_adapter_lineage_in_exec_response() {
             adapter_id: "test-adapter".to_string(),
             generation: 5,
             mode: AdapterMode::Serve,
+            specialization: AdapterSpecialization::Stable,
         },
         candidate_adapter: None,
+        shared_adapter: None,
+        stable_adapter: None,
     };
 
     let request = AtomRequest {
@@ -106,12 +116,16 @@ fn test_adapter_lineage_with_candidate() {
             adapter_id: "active".to_string(),
             generation: 1,
             mode: AdapterMode::Serve,
+            specialization: AdapterSpecialization::Stable,
         },
         candidate_adapter: Some(AdapterRef {
             adapter_id: "candidate".to_string(),
             generation: 2,
             mode: AdapterMode::ShadowEval,
+            specialization: AdapterSpecialization::Candidate,
         }),
+        shared_adapter: None,
+        stable_adapter: None,
     };
 
     let request = AtomRequest {

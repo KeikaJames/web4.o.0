@@ -124,13 +124,26 @@ pub fn dispatch(
         }
     };
 
-    let exec_response = ExecResponse {
-        atom_id: backend_resp.atom_id,
-        output: backend_resp.output,
-        tokens_produced: backend_resp.tokens_produced,
-        kv_state: backend_resp.kv_state,
-        adapter_id: request.adapter_context.as_ref().map(|ctx| ctx.resolve_adapter().adapter_id.clone()),
-        adapter_generation: request.adapter_context.as_ref().map(|ctx| ctx.resolve_adapter().generation),
+    let exec_response = {
+        let resolved = request.adapter_context.as_ref().map(|ctx| ctx.resolve_adapter());
+        ExecResponse {
+            atom_id: backend_resp.atom_id,
+            output: backend_resp.output,
+            tokens_produced: backend_resp.tokens_produced,
+            kv_state: backend_resp.kv_state,
+            adapter_id: resolved.map(|a| a.adapter_id.clone()),
+            adapter_generation: resolved.map(|a| a.generation),
+            adapter_specialization: resolved.map(|a| a.specialization.clone()),
+            specialization_summary: request.adapter_context.as_ref().and_then(|ctx| {
+                let selection = ctx.get_selection();
+                Some(crate::exec::SpecializationSummary {
+                    stable_generation: selection.stable.generation,
+                    shared_generation: selection.shared.as_ref().map(|a| a.generation),
+                    candidate_generation: selection.candidate.as_ref().map(|a| a.generation),
+                    stable_adapter_id: selection.stable.adapter_id.clone(),
+                })
+            }),
+        }
     };
 
     let explain = PlacementExplain::from_decision(&placement, migrations.len());

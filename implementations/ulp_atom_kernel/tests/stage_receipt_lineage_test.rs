@@ -1,5 +1,6 @@
 //! Test StageReceipt adapter lineage verification.
 
+use ulp_atom_kernel::adapter::AdapterSpecialization;
 use ulp_atom_kernel::kv::KVChunk;
 use ulp_atom_kernel::runtime::Nonce;
 use ulp_atom_kernel::sovereignty::{StageReceipt, KVHandoff, KVHandoffMetadata};
@@ -17,6 +18,7 @@ fn test_stage_receipt_adapter_lineage_match() {
         handoff_id: Some("handoff1".to_string()),
         adapter_id: Some("adapter1".to_string()),
         adapter_generation: Some(5),
+        adapter_specialization: Some(AdapterSpecialization::Stable),
     };
 
     let handoff = KVHandoff {
@@ -46,6 +48,7 @@ fn test_stage_receipt_adapter_lineage_match() {
             ownership_hint: Some("home1".to_string()),
             migration_hint: None,
             adapter_generation: Some(5),
+            adapter_specialization: Some(AdapterSpecialization::Stable),
         },
     };
 
@@ -65,6 +68,7 @@ fn test_stage_receipt_adapter_lineage_mismatch() {
         handoff_id: Some("handoff1".to_string()),
         adapter_id: Some("adapter1".to_string()),
         adapter_generation: Some(5),
+        adapter_specialization: Some(AdapterSpecialization::Stable),
     };
 
     let handoff = KVHandoff {
@@ -94,6 +98,7 @@ fn test_stage_receipt_adapter_lineage_mismatch() {
             ownership_hint: Some("home1".to_string()),
             migration_hint: None,
             adapter_generation: Some(3), // Mismatch
+            adapter_specialization: Some(AdapterSpecialization::Candidate), // Specialization mismatch
         },
     };
 
@@ -114,6 +119,7 @@ fn test_stage_receipt_adapter_lineage_both_none() {
         handoff_id: Some("handoff1".to_string()),
         adapter_id: None,
         adapter_generation: None,
+        adapter_specialization: None,
     };
 
     let handoff = KVHandoff {
@@ -143,6 +149,7 @@ fn test_stage_receipt_adapter_lineage_both_none() {
             ownership_hint: Some("home1".to_string()),
             migration_hint: None,
             adapter_generation: None,
+            adapter_specialization: None,
         },
     };
 

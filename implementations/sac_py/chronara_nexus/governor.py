@@ -117,15 +117,29 @@ class Governor:
         validation_result = atom_result.get("validation_result")
         if validation_result:
             # Use atom's validation result
-            lineage_valid = validation_result.get("lineage_valid", False)
+            active_match = (
+                validation_result.get("active_adapter_id") == self.active_adapter.adapter_id
+                and validation_result.get("active_generation") == self.active_adapter.generation
+            )
+            candidate_match = (
+                validation_result.get("candidate_adapter_id") == candidate.adapter_id
+                and validation_result.get("candidate_generation") == candidate.generation
+            )
+            lineage_valid = validation_result.get("lineage_valid", False) and active_match and candidate_match
             output_match = validation_result.get("output_match", False)
             kv_count_match = validation_result.get("kv_count_match", False)
-            is_acceptable = validation_result.get("is_acceptable", False)
+            is_acceptable = (
+                validation_result.get("is_acceptable", False)
+                and output_match
+                and kv_count_match
+            )
 
             generation_advanced = candidate.generation > self.active_adapter.generation
             passed = lineage_valid and is_acceptable and generation_advanced
 
             metric_summary = {
+                "active_match": active_match,
+                "candidate_match": candidate_match,
                 "lineage_valid": lineage_valid,
                 "output_match": output_match,
                 "kv_count_match": kv_count_match,
@@ -136,7 +150,7 @@ class Governor:
 
             reason = None
             if not passed:
-                if not lineage_valid:
+                if not active_match or not candidate_match or not lineage_valid:
                     reason = "adapter lineage invalid"
                 elif not is_acceptable:
                     reason = "validation not acceptable"
@@ -210,9 +224,13 @@ class Governor:
         kv_count_match = comparison_result.get("kv_count_match", False)
         generation_advanced = candidate.generation > self.active_adapter.generation
         if "is_acceptable" in comparison_result:
-            is_acceptable = comparison_result["is_acceptable"]
+            is_acceptable = (
+                comparison_result["is_acceptable"]
+                and output_match
+                and kv_count_match
+            )
         else:
-            is_acceptable = lineage_valid and kv_count_match
+            is_acceptable = lineage_valid and output_match and kv_count_match
 
         # Strict: must have valid lineage and acceptable behavior
         passed = lineage_valid and is_acceptable and generation_advanced

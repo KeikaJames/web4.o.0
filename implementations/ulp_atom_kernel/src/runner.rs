@@ -24,6 +24,8 @@ impl ComputeKernel for LocalKernel {
             kv_state: request.kv_state,
             adapter_id: None,
             adapter_generation: None,
+            adapter_specialization: None,
+            specialization_summary: None,
         })
     }
 

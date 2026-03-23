@@ -30,6 +30,7 @@ fn stage_receipt_verify_with_handoff_success() {
         handoff_id: Some("test-handoff".into()),
         adapter_id: None,
         adapter_generation: None,
+        adapter_specialization: None,
     };
 
     assert!(receipt.verify_with_handoff("prefill", &Nonce::new(42), &handoff).is_ok());
@@ -62,6 +63,7 @@ fn stage_receipt_verify_with_handoff_id_mismatch() {
         handoff_id: Some("handoff-B".into()),
         adapter_id: None,
         adapter_generation: None,
+        adapter_specialization: None,
     };
 
     let result = receipt.verify_with_handoff("prefill", &Nonce::new(42), &handoff);
@@ -96,6 +98,7 @@ fn stage_receipt_verify_with_handoff_kv_summary_mismatch() {
         handoff_id: Some("test-handoff".into()),
         adapter_id: None,
         adapter_generation: None,
+        adapter_specialization: None,
     };
 
     let result = receipt.verify_with_handoff("prefill", &Nonce::new(42), &handoff);

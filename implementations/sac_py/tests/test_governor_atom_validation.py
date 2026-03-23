@@ -82,6 +82,59 @@ def test_governor_rejects_not_acceptable():
     assert "not acceptable" in report.reason
 
 
+def test_governor_rejects_validation_result_lineage_mismatch():
+    """Governor rejects validation_result that disagrees with expected adapter lineage."""
+    active = AdapterRef("base", 1, AdapterMode.SERVE)
+    candidate = AdapterRef("base", 2, AdapterMode.SERVE)
+    governor = Governor(active)
+
+    atom_result = {
+        "validation_result": {
+            "active_adapter_id": "wrong-active",
+            "active_generation": 999,
+            "candidate_adapter_id": "wrong-candidate",
+            "candidate_generation": 999,
+            "lineage_valid": True,
+            "output_match": True,
+            "kv_count_match": True,
+            "is_acceptable": True,
+        }
+    }
+
+    report = governor.validate_from_atom_result(candidate, atom_result)
+
+    assert not report.passed
+    assert report.metric_summary["active_match"] is False
+    assert report.metric_summary["candidate_match"] is False
+    assert "lineage invalid" in report.reason
+
+
+def test_governor_rejects_output_mismatch_even_if_acceptable_true():
+    """Governor does not accept contradictory validation results."""
+    active = AdapterRef("base", 1, AdapterMode.SERVE)
+    candidate = AdapterRef("base", 2, AdapterMode.SERVE)
+    governor = Governor(active)
+
+    atom_result = {
+        "validation_result": {
+            "active_adapter_id": "base",
+            "active_generation": 1,
+            "candidate_adapter_id": "base",
+            "candidate_generation": 2,
+            "lineage_valid": True,
+            "output_match": False,
+            "kv_count_match": True,
+            "is_acceptable": True,
+        }
+    }
+
+    report = governor.validate_from_atom_result(candidate, atom_result)
+
+    assert not report.passed
+    assert report.metric_summary["output_match"] is False
+    assert "not acceptable" in report.reason
+
+
 def test_governor_fallback_to_exec_response():
     """Governor falls back to exec_response when no validation_result."""
     active = AdapterRef("base", 1, AdapterMode.SERVE)

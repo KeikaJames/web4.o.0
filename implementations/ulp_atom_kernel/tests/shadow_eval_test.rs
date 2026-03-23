@@ -1,6 +1,6 @@
 //! Test shadow evaluation dual-path execution.
 
-use ulp_atom_kernel::adapter::{AdapterContext, AdapterMode, AdapterRef};
+use ulp_atom_kernel::adapter::{AdapterContext, AdapterMode, AdapterRef, AdapterSpecialization};
 use ulp_atom_kernel::atom::{AtomKind, ComputeAtom, Region};
 use ulp_atom_kernel::backend::mock::MockBackend;
 use ulp_atom_kernel::kernel::{self, AtomRequest};
@@ -23,12 +23,16 @@ fn test_dispatch_shadow_dual_path() {
             adapter_id: "active".to_string(),
             generation: 1,
             mode: AdapterMode::Serve,
+            specialization: AdapterSpecialization::Stable,
         },
         candidate_adapter: Some(AdapterRef {
             adapter_id: "active".to_string(),
             generation: 2,
             mode: AdapterMode::ShadowEval,
+            specialization: AdapterSpecialization::Candidate,
         }),
+        shared_adapter: None,
+        stable_adapter: None,
     };
 
     let request = AtomRequest {
