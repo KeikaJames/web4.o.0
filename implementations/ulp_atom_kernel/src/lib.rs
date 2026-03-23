@@ -21,3 +21,4 @@ pub mod sovereignty;
 pub mod adapter;
 pub mod shadow;
 pub mod link;
+pub mod validation;

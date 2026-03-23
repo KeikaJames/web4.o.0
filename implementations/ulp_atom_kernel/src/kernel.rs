@@ -66,6 +66,8 @@ pub struct AtomResponse {
     pub backend_kind: Option<BackendKind>,
     #[serde(default)]
     pub backend_device: Option<String>,
+    #[serde(default)]
+    pub validation_result: Option<crate::validation::ValidationResult>,
 }
 
 /// Run one request through the full kernel path:
@@ -135,6 +137,15 @@ pub fn dispatch(
 
     let caps = backend.device_capabilities();
 
+    // Generate validation result for serve mode
+    let validation_result = request.adapter_context.as_ref().map(|ctx| {
+        let adapter = ctx.resolve_adapter();
+        crate::validation::ValidationResult::serve_only(
+            adapter.adapter_id.clone(),
+            adapter.generation,
+        )
+    });
+
     Ok(AtomResponse {
         placement,
         explain,
@@ -142,6 +153,7 @@ pub fn dispatch(
         exec_response,
         backend_kind: Some(caps.backend_kind),
         backend_device: Some(caps.device_name),
+        validation_result,
     })
 }
 
@@ -176,5 +188,20 @@ pub fn dispatch_shadow(
         shadow_resp.exec_response.clone(),
     );
 
-    Ok((active_resp, comparison))
+    // Generate validation result from shadow comparison
+    let validation_result = crate::validation::ValidationResult::shadow_eval(
+        adapter_ctx.active_adapter.adapter_id.clone(),
+        adapter_ctx.active_adapter.generation,
+        candidate.adapter_id.clone(),
+        candidate.generation,
+        comparison.lineage_valid,
+        comparison.output_match,
+        comparison.kv_count_match,
+    );
+
+    // Attach validation result to active response
+    let mut final_resp = active_resp;
+    final_resp.validation_result = Some(validation_result);
+
+    Ok((final_resp, comparison))
 }
