@@ -625,3 +625,230 @@ class FederationSummary:
             export_version="1.0",
             source_node=source_node,
         )
+
+
+class ExchangeStatus(Enum):
+    """Phase 11: Federation exchange status.
+
+    - ACCEPT: Remote summary is compatible and accepted for exchange
+    - DOWNGRADE: Remote summary has issues but can be downgraded for limited exchange
+    - REJECT: Remote summary is incompatible and rejected
+    """
+    ACCEPT = "accept"
+    DOWNGRADE = "downgrade"
+    REJECT = "reject"
+
+
+@dataclass
+class LineageCompatibility:
+    """Phase 11: Lineage compatibility assessment."""
+    compatible: bool
+    match_score: float  # 0.0-1.0
+    generation_gap: int
+    is_parent_child: bool
+    lineage_hash_match: bool
+    reason: Optional[str] = None
+
+
+@dataclass
+class SpecializationCompatibility:
+    """Phase 11: Specialization compatibility assessment."""
+    compatible: bool
+    local_spec: str
+    remote_spec: str
+    can_compose: bool
+    reason: Optional[str] = None
+
+
+@dataclass
+class ValidationCompatibility:
+    """Phase 11: Validation acceptance assessment."""
+    acceptable: bool
+    local_score: float
+    remote_score: float
+    score_delta: float
+    meets_threshold: bool
+    reason: Optional[str] = None
+
+
+@dataclass
+class ComparisonCompatibility:
+    """Phase 11: Comparison outcome compatibility assessment."""
+    acceptable: bool
+    local_status: str
+    remote_status: str
+    both_acceptable: bool
+    reason: Optional[str] = None
+
+
+@dataclass
+class FederationExchangeGate:
+    """Phase 11: Federation-ready compatibility and exchange gate.
+
+    Structured result of comparing local and remote federation summaries
+    for exchange readiness. Deterministic and testable.
+
+    Fields:
+        - local_summary_ref: Reference to local summary identity
+        - remote_summary_ref: Reference to remote summary identity
+        - lineage: Lineage compatibility assessment
+        - specialization: Specialization compatibility assessment
+        - validation: Validation acceptance assessment
+        - comparison: Comparison outcome compatibility assessment
+        - status: Overall exchange status (accept/downgrade/reject)
+        - recommendation: Specific recommendation for exchange
+        - reason: Human-readable explanation
+        - fallback_used: Whether fallback logic was applied
+        - version: Gate format version
+        - timestamp: Gate creation timestamp
+    """
+    # Identity references
+    local_adapter_id: str
+    local_generation: int
+    remote_adapter_id: str
+    remote_generation: int
+
+    # Compatibility assessments
+    lineage: LineageCompatibility
+    specialization: SpecializationCompatibility
+    validation: ValidationCompatibility
+    comparison: ComparisonCompatibility
+
+    # Exchange decision
+    status: ExchangeStatus
+    recommendation: str
+    reason: str
+
+    # Metadata
+    fallback_used: bool
+    version: str
+    timestamp: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to JSON-friendly dictionary."""
+        return {
+            "local": {
+                "adapter_id": self.local_adapter_id,
+                "generation": self.local_generation,
+            },
+            "remote": {
+                "adapter_id": self.remote_adapter_id,
+                "generation": self.remote_generation,
+            },
+            "lineage": {
+                "compatible": self.lineage.compatible,
+                "match_score": self.lineage.match_score,
+                "generation_gap": self.lineage.generation_gap,
+                "is_parent_child": self.lineage.is_parent_child,
+                "lineage_hash_match": self.lineage.lineage_hash_match,
+                "reason": self.lineage.reason,
+            },
+            "specialization": {
+                "compatible": self.specialization.compatible,
+                "local_spec": self.specialization.local_spec,
+                "remote_spec": self.specialization.remote_spec,
+                "can_compose": self.specialization.can_compose,
+                "reason": self.specialization.reason,
+            },
+            "validation": {
+                "acceptable": self.validation.acceptable,
+                "local_score": self.validation.local_score,
+                "remote_score": self.validation.remote_score,
+                "score_delta": self.validation.score_delta,
+                "meets_threshold": self.validation.meets_threshold,
+                "reason": self.validation.reason,
+            },
+            "comparison": {
+                "acceptable": self.comparison.acceptable,
+                "local_status": self.comparison.local_status,
+                "remote_status": self.comparison.remote_status,
+                "both_acceptable": self.comparison.both_acceptable,
+                "reason": self.comparison.reason,
+            },
+            "status": self.status.value,
+            "recommendation": self.recommendation,
+            "reason": self.reason,
+            "fallback_used": self.fallback_used,
+            "version": self.version,
+            "timestamp": self.timestamp,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "FederationExchangeGate":
+        """Create from dictionary."""
+        local_data = data.get("local", {})
+        remote_data = data.get("remote", {})
+
+        lineage_data = data.get("lineage", {})
+        lineage = LineageCompatibility(
+            compatible=lineage_data.get("compatible", False),
+            match_score=lineage_data.get("match_score", 0.0),
+            generation_gap=lineage_data.get("generation_gap", 0),
+            is_parent_child=lineage_data.get("is_parent_child", False),
+            lineage_hash_match=lineage_data.get("lineage_hash_match", False),
+            reason=lineage_data.get("reason"),
+        )
+
+        spec_data = data.get("specialization", {})
+        specialization = SpecializationCompatibility(
+            compatible=spec_data.get("compatible", False),
+            local_spec=spec_data.get("local_spec", "stable"),
+            remote_spec=spec_data.get("remote_spec", "stable"),
+            can_compose=spec_data.get("can_compose", False),
+            reason=spec_data.get("reason"),
+        )
+
+        val_data = data.get("validation", {})
+        validation = ValidationCompatibility(
+            acceptable=val_data.get("acceptable", False),
+            local_score=val_data.get("local_score", 0.0),
+            remote_score=val_data.get("remote_score", 0.0),
+            score_delta=val_data.get("score_delta", 0.0),
+            meets_threshold=val_data.get("meets_threshold", False),
+            reason=val_data.get("reason"),
+        )
+
+        comp_data = data.get("comparison", {})
+        comparison = ComparisonCompatibility(
+            acceptable=comp_data.get("acceptable", False),
+            local_status=comp_data.get("local_status", "unknown"),
+            remote_status=comp_data.get("remote_status", "unknown"),
+            both_acceptable=comp_data.get("both_acceptable", False),
+            reason=comp_data.get("reason"),
+        )
+
+        status_str = data.get("status", "reject")
+        status = ExchangeStatus(status_str) if status_str in ["accept", "downgrade", "reject"] else ExchangeStatus.REJECT
+
+        return cls(
+            local_adapter_id=local_data.get("adapter_id", ""),
+            local_generation=local_data.get("generation", 0),
+            remote_adapter_id=remote_data.get("adapter_id", ""),
+            remote_generation=remote_data.get("generation", 0),
+            lineage=lineage,
+            specialization=specialization,
+            validation=validation,
+            comparison=comparison,
+            status=status,
+            recommendation=data.get("recommendation", "reject"),
+            reason=data.get("reason", "unknown"),
+            fallback_used=data.get("fallback_used", False),
+            version=data.get("version", "1.0"),
+            timestamp=data.get("timestamp", ""),
+        )
+
+    def can_exchange(self) -> bool:
+        """Check if exchange is permitted (accept or downgrade)."""
+        return self.status in (ExchangeStatus.ACCEPT, ExchangeStatus.DOWNGRADE)
+
+    def should_accept(self) -> bool:
+        """Check if remote summary should be fully accepted."""
+        return self.status == ExchangeStatus.ACCEPT
+
+    def should_downgrade(self) -> bool:
+        """Check if remote summary should be downgraded."""
+        return self.status == ExchangeStatus.DOWNGRADE
+
+    def should_reject(self) -> bool:
+        """Check if remote summary should be rejected."""
+        return self.status == ExchangeStatus.REJECT

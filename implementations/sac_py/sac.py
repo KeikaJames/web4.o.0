@@ -663,3 +663,122 @@ class SACContainer:
             pass
 
         return result
+
+    def check_exchange_compatibility(
+        self,
+        remote_summary_dict: dict,
+    ) -> dict:
+        """Check compatibility with remote federation summary.
+
+        Phase 11: Exchange gate entry point for SAC.
+        Accepts remote summary as dict (imported from network/storage).
+        Safe to call during serve path - never blocks or raises.
+
+        Args:
+            remote_summary_dict: Remote federation summary as dictionary
+
+        Returns:
+            dict: Exchange gate result as dictionary
+        """
+        from chronara_nexus.types import FederationSummary, FederationExchangeGate
+
+        try:
+            # Parse remote summary
+            remote_summary = FederationSummary.from_dict(remote_summary_dict)
+
+            # Initialize if needed
+            if not hasattr(self, '_chronara_governor'):
+                self.init_chronara()
+
+            # Get consolidator params if available
+            consolidator_params = None
+            if hasattr(self, '_chronara_consolidator'):
+                consolidator = self._chronara_consolidator
+                if consolidator.candidate_adapter:
+                    consolidator_params = consolidator.get_specialization_params(AdapterSpecialization.CANDIDATE)
+                elif consolidator.stable_adapter:
+                    consolidator_params = consolidator.get_specialization_params(AdapterSpecialization.STABLE)
+
+            # Use Governor's exchange compatibility check
+            gate = self._chronara_governor.check_exchange_compatibility(
+                remote_summary=remote_summary,
+                local_params=consolidator_params,
+            )
+
+            # Incorporate into traces
+            self._chronara_governor.incorporate_exchange_gate(gate)
+
+            return gate.to_dict()
+
+        except Exception:
+            # Failure safety: return reject gate
+            from chronara_nexus.types import (
+                FederationExchangeGate,
+                ExchangeStatus,
+                LineageCompatibility,
+                SpecializationCompatibility,
+                ValidationCompatibility,
+                ComparisonCompatibility,
+            )
+            from datetime import datetime
+
+            gate = FederationExchangeGate(
+                local_adapter_id=getattr(self, 'sac_id', 'unknown'),
+                local_generation=0,
+                remote_adapter_id=remote_summary_dict.get('identity', {}).get('adapter_id', 'unknown'),
+                remote_generation=remote_summary_dict.get('identity', {}).get('generation', 0),
+                lineage=LineageCompatibility(
+                    compatible=False,
+                    match_score=0.0,
+                    generation_gap=0,
+                    is_parent_child=False,
+                    lineage_hash_match=False,
+                    reason="parse_error",
+                ),
+                specialization=SpecializationCompatibility(
+                    compatible=False,
+                    local_spec="unknown",
+                    remote_spec=remote_summary_dict.get('identity', {}).get('specialization', 'unknown'),
+                    can_compose=False,
+                    reason="parse_error",
+                ),
+                validation=ValidationCompatibility(
+                    acceptable=False,
+                    local_score=0.0,
+                    remote_score=0.0,
+                    score_delta=0.0,
+                    meets_threshold=False,
+                    reason="parse_error",
+                ),
+                comparison=ComparisonCompatibility(
+                    acceptable=False,
+                    local_status="unknown",
+                    remote_status=remote_summary_dict.get('comparison_outcome', {}).get('status', 'unknown'),
+                    both_acceptable=False,
+                    reason="parse_error",
+                ),
+                status=ExchangeStatus.REJECT,
+                recommendation="reject_parse_error",
+                reason="Error parsing remote summary",
+                fallback_used=True,
+                version="1.1",
+                timestamp=datetime.utcnow().isoformat() + "Z",
+            )
+            return gate.to_dict()
+
+    def can_accept_remote_summary(self, remote_summary_dict: dict) -> bool:
+        """Quick check if remote summary can be accepted.
+
+        Phase 11: Fast path for simple accept/reject decisions.
+        """
+        from chronara_nexus.types import FederationSummary
+
+        try:
+            remote_summary = FederationSummary.from_dict(remote_summary_dict)
+
+            if not hasattr(self, '_chronara_governor'):
+                self.init_chronara()
+
+            return self._chronara_governor.can_accept_remote_summary(remote_summary)
+        except Exception:
+            return False

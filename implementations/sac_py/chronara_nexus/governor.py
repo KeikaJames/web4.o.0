@@ -40,6 +40,8 @@ class ValidationTrace:
         self.deliberation_outcome = deliberation_outcome
         self.deliberation_trace = deliberation_trace or {}
         self.multi_role_review_summary = multi_role_review_summary or {}
+        # Phase 11: Exchange gate summary
+        self.exchange_gate_summary: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         result = {
@@ -63,6 +65,8 @@ class ValidationTrace:
             result["deliberation_trace"] = self.deliberation_trace
         if self.multi_role_review_summary:
             result["multi_role_review_summary"] = self.multi_role_review_summary
+        if self.exchange_gate_summary:
+            result["exchange_gate_summary"] = self.exchange_gate_summary
         return result
 
 
@@ -981,3 +985,140 @@ class Governor:
             export_version="1.0",
             source_node=source_node,
         )
+
+    def check_exchange_compatibility(
+        self,
+        remote_summary: "FederationSummary",
+        local_params: Optional[Dict[str, float]] = None,
+    ) -> "FederationExchangeGate":
+        """Check compatibility with remote federation summary.
+
+        Phase 11: Exchange gate entry point for Governor.
+        Safe to call during serve path - never blocks or raises.
+
+        Args:
+            remote_summary: Remote federation summary to compare against
+            local_params: Optional local parameters for summary extraction
+
+        Returns:
+            FederationExchangeGate with full compatibility assessment
+        """
+        from .exchange_gate import FederationExchangeComparator
+
+        try:
+            # Extract local summary
+            local_summary = self.extract_federation_summary(
+                consolidator_params=local_params
+            )
+
+            # Compare using exchange comparator
+            return FederationExchangeComparator.compare(
+                local=local_summary,
+                remote=remote_summary,
+                fallback_on_error=True,
+            )
+
+        except Exception:
+            # Failure safety: return reject gate
+            from .types import (
+                FederationExchangeGate,
+                ExchangeStatus,
+                LineageCompatibility,
+                SpecializationCompatibility,
+                ValidationCompatibility,
+                ComparisonCompatibility,
+            )
+            from datetime import datetime
+
+            return FederationExchangeGate(
+                local_adapter_id=self.active_adapter.adapter_id,
+                local_generation=self.active_adapter.generation,
+                remote_adapter_id=remote_summary.identity.adapter_id,
+                remote_generation=remote_summary.identity.generation,
+                lineage=LineageCompatibility(
+                    compatible=False,
+                    match_score=0.0,
+                    generation_gap=0,
+                    is_parent_child=False,
+                    lineage_hash_match=False,
+                    reason="extraction_error",
+                ),
+                specialization=SpecializationCompatibility(
+                    compatible=False,
+                    local_spec=self.active_adapter.specialization.value,
+                    remote_spec=remote_summary.identity.specialization,
+                    can_compose=False,
+                    reason="extraction_error",
+                ),
+                validation=ValidationCompatibility(
+                    acceptable=False,
+                    local_score=0.0,
+                    remote_score=remote_summary.validation_score.score,
+                    score_delta=0.0,
+                    meets_threshold=False,
+                    reason="extraction_error",
+                ),
+                comparison=ComparisonCompatibility(
+                    acceptable=False,
+                    local_status="unknown",
+                    remote_status=remote_summary.comparison_outcome.status,
+                    both_acceptable=False,
+                    reason="extraction_error",
+                ),
+                status=ExchangeStatus.REJECT,
+                recommendation="reject_extraction_error",
+                reason="Error extracting local summary for comparison",
+                fallback_used=True,
+                version="1.1",
+                timestamp=datetime.utcnow().isoformat() + "Z",
+            )
+
+    def can_accept_remote_summary(
+        self,
+        remote_summary: "FederationSummary",
+    ) -> bool:
+        """Quick check if remote summary can be accepted.
+
+        Phase 11: Fast path for simple accept/reject decisions.
+        """
+        from .exchange_gate import FederationExchangeComparator
+
+        try:
+            local_summary = self.extract_federation_summary()
+            return FederationExchangeComparator.quick_check(
+                local=local_summary,
+                remote=remote_summary,
+            )
+        except Exception:
+            return False
+
+    def incorporate_exchange_gate(
+        self,
+        gate: "FederationExchangeGate",
+    ) -> bool:
+        """Incorporate exchange gate result into Governor state.
+
+        Phase 11: Updates validation traces with exchange information.
+        Does NOT modify adapter state - only records for audit.
+
+        Returns:
+            True if incorporation succeeded
+        """
+        try:
+            # Add exchange info to last validation trace if exists
+            if self._validation_traces and len(self._validation_traces) > 0:
+                last_trace = self._validation_traces[-1]
+                if not hasattr(last_trace, 'exchange_gate_summary'):
+                    last_trace.exchange_gate_summary = {}
+                last_trace.exchange_gate_summary = {
+                    "remote_adapter_id": gate.remote_adapter_id,
+                    "remote_generation": gate.remote_generation,
+                    "status": gate.status.value,
+                    "recommendation": gate.recommendation,
+                    "lineage_compatible": gate.lineage.compatible,
+                    "specialization_compatible": gate.specialization.compatible,
+                    "validation_acceptable": gate.validation.acceptable,
+                }
+            return True
+        except Exception:
+            return False
