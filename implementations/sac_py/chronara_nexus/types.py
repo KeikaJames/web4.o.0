@@ -852,3 +852,212 @@ class FederationExchangeGate:
     def should_reject(self) -> bool:
         """Check if remote summary should be rejected."""
         return self.status == ExchangeStatus.REJECT
+
+
+class StagingDecision(Enum):
+    """Phase 12: Remote summary staging decision.
+
+    - STAGE_ACCEPT: Remote summary accepted for full staging
+    - STAGE_DOWNGRADE: Remote summary accepted but downgraded
+    - STAGE_REJECT: Remote summary rejected, not staged
+    """
+    STAGE_ACCEPT = "stage_accept"
+    STAGE_DOWNGRADE = "stage_downgrade"
+    STAGE_REJECT = "stage_reject"
+
+
+@dataclass
+class RemoteSummaryIntake:
+    """Phase 12: Remote federation summary intake record.
+
+    Records the intake of a remote summary with validation
+    and compatibility check results.
+    """
+    # Remote identity
+    remote_adapter_id: str
+    remote_generation: int
+    remote_source_node: Optional[str]
+
+    # Intake metadata
+    intake_timestamp: str
+    intake_version: str
+
+    # Raw summary reference (for audit)
+    raw_summary_hash: str  # Deterministic hash of raw summary
+
+    # Intake validation
+    structure_valid: bool
+    required_fields_present: bool
+    validation_errors: List[str]
+
+    # Compatibility result (from Phase 11)
+    exchange_gate: Optional[FederationExchangeGate]
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to JSON-friendly dictionary."""
+        return {
+            "remote": {
+                "adapter_id": self.remote_adapter_id,
+                "generation": self.remote_generation,
+                "source_node": self.remote_source_node,
+            },
+            "intake": {
+                "timestamp": self.intake_timestamp,
+                "version": self.intake_version,
+            },
+            "raw_summary_hash": self.raw_summary_hash,
+            "validation": {
+                "structure_valid": self.structure_valid,
+                "required_fields_present": self.required_fields_present,
+                "errors": self.validation_errors,
+            },
+            "exchange_gate": self.exchange_gate.to_dict() if self.exchange_gate else None,
+        }
+
+
+@dataclass
+class StagedRemoteCandidate:
+    """Phase 12: Staged remote candidate for potential federation.
+
+    Represents a remote summary that has passed intake and
+    is now staged for potential future use.
+    """
+    # Identity
+    adapter_id: str
+    generation: int
+    source_node: Optional[str]
+
+    # Staging metadata
+    staged_at: str
+    staging_decision: StagingDecision
+    staging_version: str
+
+    # Federation summary (validated and potentially downgraded)
+    summary: FederationSummary
+
+    # Exchange gate result that led to staging
+    gate_result: FederationExchangeGate
+
+    # Staging status
+    is_active: bool  # Whether this staged candidate is active
+    is_downgraded: bool  # Whether this was a downgrade staging
+
+    # Trace info
+    intake_record_ref: str  # Reference to intake record
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to JSON-friendly dictionary."""
+        return {
+            "identity": {
+                "adapter_id": self.adapter_id,
+                "generation": self.generation,
+                "source_node": self.source_node,
+            },
+            "staging": {
+                "decision": self.staging_decision.value,
+                "staged_at": self.staged_at,
+                "version": self.staging_version,
+                "is_active": self.is_active,
+                "is_downgraded": self.is_downgraded,
+            },
+            "summary": self.summary.to_dict(),
+            "gate_result": self.gate_result.to_dict(),
+            "intake_ref": self.intake_record_ref,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "StagedRemoteCandidate":
+        """Create from dictionary."""
+        identity = data.get("identity", {})
+        staging = data.get("staging", {})
+
+        decision_str = staging.get("decision", "stage_reject")
+        decision = StagingDecision(decision_str) if decision_str in ["stage_accept", "stage_downgrade", "stage_reject"] else StagingDecision.STAGE_REJECT
+
+        return cls(
+            adapter_id=identity.get("adapter_id", ""),
+            generation=identity.get("generation", 0),
+            source_node=identity.get("source_node"),
+            staged_at=staging.get("staged_at", ""),
+            staging_decision=decision,
+            staging_version=staging.get("version", "1.0"),
+            summary=FederationSummary.from_dict(data.get("summary", {})),
+            gate_result=FederationExchangeGate.from_dict(data.get("gate_result", {})),
+            is_active=staging.get("is_active", False),
+            is_downgraded=staging.get("is_downgraded", False),
+            intake_record_ref=data.get("intake_ref", ""),
+        )
+
+
+@dataclass
+class RemoteIntakeResult:
+    """Phase 12: Result of remote summary intake processing.
+
+    Complete result including intake record, staging decision,
+    and staged candidate (if accepted).
+    """
+    # Processing metadata
+    processed_at: str
+    processor_version: str
+    fallback_used: bool
+
+    # Intake record
+    intake: RemoteSummaryIntake
+
+    # Staging decision
+    decision: StagingDecision
+    decision_reason: str
+    recommendation: str
+
+    # Staged candidate (if accepted or downgraded)
+    staged_candidate: Optional[StagedRemoteCandidate]
+
+    # Rejection trace (if rejected)
+    rejection_trace: Optional[Dict[str, Any]]
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to JSON-friendly dictionary."""
+        return {
+            "processed_at": self.processed_at,
+            "processor_version": self.processor_version,
+            "fallback_used": self.fallback_used,
+            "intake": self.intake.to_dict(),
+            "decision": self.decision.value,
+            "decision_reason": self.decision_reason,
+            "recommendation": self.recommendation,
+            "staged_candidate": self.staged_candidate.to_dict() if self.staged_candidate else None,
+            "rejection_trace": self.rejection_trace,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "RemoteIntakeResult":
+        """Create from dictionary."""
+        decision_str = data.get("decision", "stage_reject")
+        decision = StagingDecision(decision_str) if decision_str in ["stage_accept", "stage_downgrade", "stage_reject"] else StagingDecision.STAGE_REJECT
+
+        staged_data = data.get("staged_candidate")
+        staged = StagedRemoteCandidate.from_dict(staged_data) if staged_data else None
+
+        return cls(
+            processed_at=data.get("processed_at", ""),
+            processor_version=data.get("processor_version", "1.0"),
+            fallback_used=data.get("fallback_used", False),
+            intake=RemoteSummaryIntake(**data.get("intake", {})),
+            decision=decision,
+            decision_reason=data.get("decision_reason", ""),
+            recommendation=data.get("recommendation", ""),
+            staged_candidate=staged,
+            rejection_trace=data.get("rejection_trace"),
+        )
+
+    def is_staged(self) -> bool:
+        """Check if remote summary was staged (accept or downgrade)."""
+        return self.decision in (StagingDecision.STAGE_ACCEPT, StagingDecision.STAGE_DOWNGRADE)
+
+    def is_rejected(self) -> bool:
+        """Check if remote summary was rejected."""
+        return self.decision == StagingDecision.STAGE_REJECT
+
+    def get_staged_summary(self) -> Optional[FederationSummary]:
+        """Get staged summary if available."""
+        return self.staged_candidate.summary if self.staged_candidate else None

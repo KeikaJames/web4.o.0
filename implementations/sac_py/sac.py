@@ -782,3 +782,94 @@ class SACContainer:
             return self._chronara_governor.can_accept_remote_summary(remote_summary)
         except Exception:
             return False
+
+    def process_remote_summary_intake(
+        self,
+        remote_summary_dict: dict,
+        source_node: Optional[str] = None,
+    ) -> dict:
+        """Process remote summary intake with full staging.
+
+        Phase 12: High-level entry point for remote summary intake.
+        Safe to call during serve path - never blocks or raises.
+
+        Args:
+            remote_summary_dict: Remote federation summary as dictionary
+            source_node: Optional source node identifier
+
+        Returns:
+            dict: RemoteIntakeResult as dictionary
+        """
+        try:
+            if not hasattr(self, '_chronara_governor'):
+                self.init_chronara()
+
+            result = self._chronara_governor.process_remote_intake(
+                remote_summary_dict=remote_summary_dict,
+                source_node=source_node,
+            )
+
+            return result.to_dict()
+
+        except Exception as e:
+            # Failure safety: return reject result
+            from datetime import datetime
+            from chronara_nexus.types import (
+                RemoteIntakeResult,
+                RemoteSummaryIntake,
+                StagingDecision,
+            )
+
+            processed_at = datetime.utcnow().isoformat() + "Z"
+            remote_identity = remote_summary_dict.get('identity', {}) if isinstance(remote_summary_dict, dict) else {}
+
+            intake = RemoteSummaryIntake(
+                remote_adapter_id=remote_identity.get('adapter_id', 'unknown'),
+                remote_generation=remote_identity.get('generation', 0),
+                remote_source_node=source_node,
+                intake_timestamp=processed_at,
+                intake_version="1.0",
+                raw_summary_hash="sac_fallback",
+                structure_valid=False,
+                required_fields_present=False,
+                validation_errors=[f"sac_processing_error:{str(e)}"],
+                exchange_gate=None,
+            )
+
+            result = RemoteIntakeResult(
+                processed_at=processed_at,
+                processor_version="1.0",
+                fallback_used=True,
+                intake=intake,
+                decision=StagingDecision.STAGE_REJECT,
+                decision_reason="sac_processing_exception",
+                recommendation="reject_due_to_sac_error",
+                staged_candidate=None,
+                rejection_trace={"error": str(e), "fallback": True},
+            )
+            return result.to_dict()
+
+    def get_staged_remote_summaries(self) -> List[Dict[str, Any]]:
+        """Get all staged remote summaries.
+
+        Phase 12: Retrieve audit trail of staged remote summaries.
+        """
+        try:
+            if not hasattr(self, '_chronara_governor'):
+                self.init_chronara()
+
+            return self._chronara_governor.get_staged_remote_summaries()
+        except Exception:
+            return []
+
+    def is_remote_summary_valid_for_intake(self, remote_summary_dict: dict) -> bool:
+        """Quick check if remote summary is structurally valid for intake.
+
+        Phase 12: Fast validation without full processing.
+        """
+        from chronara_nexus.intake_processor import RemoteIntakeProcessor
+
+        try:
+            return RemoteIntakeProcessor.quick_intake_check(remote_summary_dict)
+        except Exception:
+            return False

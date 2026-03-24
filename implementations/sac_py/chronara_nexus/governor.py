@@ -42,6 +42,8 @@ class ValidationTrace:
         self.multi_role_review_summary = multi_role_review_summary or {}
         # Phase 11: Exchange gate summary
         self.exchange_gate_summary: Optional[Dict[str, Any]] = None
+        # Phase 12: Staged remote summary
+        self.staged_remote_summary: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         result = {
@@ -67,6 +69,8 @@ class ValidationTrace:
             result["multi_role_review_summary"] = self.multi_role_review_summary
         if self.exchange_gate_summary:
             result["exchange_gate_summary"] = self.exchange_gate_summary
+        if self.staged_remote_summary:
+            result["staged_remote_summary"] = self.staged_remote_summary
         return result
 
 
@@ -1122,3 +1126,116 @@ class Governor:
             return True
         except Exception:
             return False
+
+    def process_remote_intake(
+        self,
+        remote_summary_dict: Dict[str, Any],
+        source_node: Optional[str] = None,
+    ) -> "RemoteIntakeResult":
+        """Process remote summary intake with full staging.
+
+        Phase 12: Main entry point for remote summary intake.
+        Safe to call during serve path - never blocks or raises.
+
+        Args:
+            remote_summary_dict: Remote summary as dictionary
+            source_node: Optional source node identifier
+
+        Returns:
+            RemoteIntakeResult with full intake and staging information
+        """
+        from .intake_processor import RemoteIntakeProcessor
+
+        try:
+            # Extract local summary for comparison
+            local_summary = self.extract_federation_summary()
+
+            # Process intake
+            result = RemoteIntakeProcessor.process_intake(
+                remote_summary_dict=remote_summary_dict,
+                local_summary=local_summary,
+                source_node=source_node,
+            )
+
+            # Record in traces if staging succeeded
+            if result.is_staged():
+                self._record_staged_remote(result)
+
+            return result
+
+        except Exception:
+            # Failure safety: return reject result
+            return self._fallback_intake_result(remote_summary_dict, source_node)
+
+    def _record_staged_remote(self, result: "RemoteIntakeResult") -> bool:
+        """Record staged remote candidate in validation traces.
+
+        Phase 12: Audit trail for staged remote summaries.
+        """
+        try:
+            if self._validation_traces and len(self._validation_traces) > 0:
+                last_trace = self._validation_traces[-1]
+                if not hasattr(last_trace, 'staged_remote_summary'):
+                    last_trace.staged_remote_summary = {}
+                last_trace.staged_remote_summary = {
+                    "adapter_id": result.intake.remote_adapter_id,
+                    "generation": result.intake.remote_generation,
+                    "decision": result.decision.value,
+                    "source_node": result.intake.remote_source_node,
+                    "is_downgraded": result.staged_candidate.is_downgraded if result.staged_candidate else False,
+                }
+            return True
+        except Exception:
+            return False
+
+    def _fallback_intake_result(
+        self,
+        remote_summary_dict: Dict[str, Any],
+        source_node: Optional[str],
+    ) -> "RemoteIntakeResult":
+        """Create fallback intake result on error."""
+        from datetime import datetime
+        from .types import (
+            RemoteIntakeResult,
+            RemoteSummaryIntake,
+            StagingDecision,
+        )
+
+        processed_at = datetime.utcnow().isoformat() + "Z"
+        remote_identity = remote_summary_dict.get("identity", {}) if isinstance(remote_summary_dict, dict) else {}
+
+        intake = RemoteSummaryIntake(
+            remote_adapter_id=remote_identity.get("adapter_id", "unknown"),
+            remote_generation=remote_identity.get("generation", 0),
+            remote_source_node=source_node,
+            intake_timestamp=processed_at,
+            intake_version="1.0",
+            raw_summary_hash="fallback",
+            structure_valid=False,
+            required_fields_present=False,
+            validation_errors=["governor_processing_error"],
+            exchange_gate=None,
+        )
+
+        return RemoteIntakeResult(
+            processed_at=processed_at,
+            processor_version="1.0",
+            fallback_used=True,
+            intake=intake,
+            decision=StagingDecision.STAGE_REJECT,
+            decision_reason="governor_processing_exception",
+            recommendation="reject_due_to_governor_error",
+            staged_candidate=None,
+            rejection_trace={"fallback": True},
+        )
+
+    def get_staged_remote_summaries(self) -> List[Dict[str, Any]]:
+        """Get all staged remote summaries from traces.
+
+        Phase 12: Retrieve staged remote summary audit trail.
+        """
+        staged = []
+        for trace in self._validation_traces:
+            if hasattr(trace, 'staged_remote_summary') and trace.staged_remote_summary:
+                staged.append(trace.staged_remote_summary)
+        return staged
