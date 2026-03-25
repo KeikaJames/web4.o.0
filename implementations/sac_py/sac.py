@@ -873,3 +873,114 @@ class SACContainer:
             return RemoteIntakeProcessor.quick_intake_check(remote_summary_dict)
         except Exception:
             return False
+
+    def triage_staged_remote_candidate(
+        self,
+        staged_candidate_dict: dict,
+    ) -> dict:
+        """Triage a staged remote candidate for readiness.
+
+        Phase 13: High-level entry point for remote summary triage.
+        Safe to call during serve path - never blocks or raises.
+
+        Args:
+            staged_candidate_dict: StagedRemoteCandidate as dictionary
+
+        Returns:
+            dict: TriageResult as dictionary
+        """
+        from chronara_nexus.types import StagedRemoteCandidate, TriageResult, TriageAssessment, TriageStatus, ReadinessSummary
+        from datetime import datetime
+        import uuid
+
+        try:
+            # Parse staged candidate
+            staged = StagedRemoteCandidate.from_dict(staged_candidate_dict)
+
+            # Initialize if needed
+            if not hasattr(self, '_chronara_governor'):
+                self.init_chronara()
+
+            # Perform triage
+            result = self._chronara_governor.triage_staged_candidate(staged)
+
+            return result.to_dict()
+
+        except Exception as e:
+            # Failure safety: return reject result
+            processed_at = datetime.utcnow().isoformat() + "Z"
+
+            assessment = TriageAssessment(
+                adapter_id=staged_candidate_dict.get('identity', {}).get('adapter_id', 'unknown'),
+                generation=staged_candidate_dict.get('identity', {}).get('generation', 0),
+                source_node=staged_candidate_dict.get('identity', {}).get('source_node'),
+                triage_status=TriageStatus.REJECT,
+                triage_version="1.0",
+                triaged_at=processed_at,
+                readiness=ReadinessSummary(
+                    readiness_score=0.0,
+                    lineage_score=0.0,
+                    specialization_score=0.0,
+                    validation_score=0.0,
+                    comparison_score=0.0,
+                    recency_score=0.0,
+                    is_fresh=False,
+                    is_compatible=False,
+                    is_priority=False,
+                    score_reason=f"sac_triage_error:{str(e)}",
+                ),
+                lineage_compatible=False,
+                specialization_compatible=False,
+                validation_acceptable=False,
+                comparison_acceptable=False,
+                recommendation="reject_sac_error",
+                reason=f"SAC triage error: {str(e)}",
+                can_promote_later=False,
+                needs_review=False,
+                expiration_hint=None,
+                original_staging_ref=staged_candidate_dict.get('intake_ref', ''),
+            )
+
+            result = TriageResult(
+                processed_at=processed_at,
+                processor_version="1.0",
+                fallback_used=True,
+                assessment=assessment,
+                target_pool="rejected",
+                priority=0,
+                trace_id=str(uuid.uuid4())[:8],
+            )
+            return result.to_dict()
+
+    def get_ready_remote_candidates(self) -> List[Dict[str, Any]]:
+        """Get all ready remote candidates.
+
+        Phase 13: Retrieve candidates marked as ready for federation.
+        """
+        try:
+            if not hasattr(self, '_chronara_governor'):
+                self.init_chronara()
+
+            return self._chronara_governor.get_ready_remote_candidates()
+        except Exception:
+            return []
+
+    def is_staged_candidate_ready(
+        self,
+        staged_candidate_dict: dict,
+    ) -> bool:
+        """Quick check if staged candidate is ready for federation.
+
+        Phase 13: Fast path for simple ready/not-ready decisions.
+        """
+        from chronara_nexus.types import StagedRemoteCandidate
+
+        try:
+            staged = StagedRemoteCandidate.from_dict(staged_candidate_dict)
+
+            if not hasattr(self, '_chronara_governor'):
+                self.init_chronara()
+
+            return self._chronara_governor.quick_readiness_check(staged)
+        except Exception:
+            return False

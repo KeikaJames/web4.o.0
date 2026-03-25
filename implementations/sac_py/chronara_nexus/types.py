@@ -1061,3 +1061,234 @@ class RemoteIntakeResult:
     def get_staged_summary(self) -> Optional[FederationSummary]:
         """Get staged summary if available."""
         return self.staged_candidate.summary if self.staged_candidate else None
+
+
+class TriageStatus(Enum):
+    """Phase 13: Triage status for staged remote summary.
+
+    - READY: Remote summary is ready for future federation promotion
+    - HOLD: Remote summary should be held for further observation
+    - DOWNGRADE: Remote summary must be downgraded before use
+    - REJECT: Remote summary should be rejected and removed from staging
+    """
+    READY = "ready"
+    HOLD = "hold"
+    DOWNGRADE = "downgrade"
+    REJECT = "reject"
+
+
+@dataclass
+class ReadinessSummary:
+    """Phase 13: Readiness summary for staged remote candidate.
+
+    Bounded-size readiness assessment for triage decisions.
+    """
+    # Overall readiness score (0.0-1.0)
+    readiness_score: float
+
+    # Component scores (0.0-1.0)
+    lineage_score: float
+    specialization_score: float
+    validation_score: float
+    comparison_score: float
+    recency_score: float  # Based on generation gap
+
+    # Flags
+    is_fresh: bool  # Generation gap within acceptable range
+    is_compatible: bool  # All compatibility checks passed
+    is_priority: bool  # High priority candidate
+
+    # Reasoning
+    score_reason: str
+
+
+@dataclass
+class TriageAssessment:
+    """Phase 13: Triage assessment for staged remote summary.
+
+    Complete triage result including status, readiness, and recommendations.
+    """
+    # Identity
+    adapter_id: str
+    generation: int
+    source_node: Optional[str]
+
+    # Triage decision
+    triage_status: TriageStatus
+    triage_version: str
+    triaged_at: str
+
+    # Readiness information
+    readiness: ReadinessSummary
+
+    # Compatibility status (from exchange gate)
+    lineage_compatible: bool
+    specialization_compatible: bool
+    validation_acceptable: bool
+    comparison_acceptable: bool
+
+    # Recommendation
+    recommendation: str
+    reason: str
+
+    # Action hints
+    can_promote_later: bool  # Whether this could be promoted in future
+    needs_review: bool  # Whether this needs manual review
+    expiration_hint: Optional[str]  # When this staging might expire
+
+    # Reference to original staging
+    original_staging_ref: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to JSON-friendly dictionary."""
+        return {
+            "identity": {
+                "adapter_id": self.adapter_id,
+                "generation": self.generation,
+                "source_node": self.source_node,
+            },
+            "triage": {
+                "status": self.triage_status.value,
+                "version": self.triage_version,
+                "triaged_at": self.triaged_at,
+            },
+            "readiness": {
+                "score": self.readiness.readiness_score,
+                "lineage_score": self.readiness.lineage_score,
+                "specialization_score": self.readiness.specialization_score,
+                "validation_score": self.readiness.validation_score,
+                "comparison_score": self.readiness.comparison_score,
+                "recency_score": self.readiness.recency_score,
+                "is_fresh": self.readiness.is_fresh,
+                "is_compatible": self.readiness.is_compatible,
+                "is_priority": self.readiness.is_priority,
+                "reason": self.readiness.score_reason,
+            },
+            "compatibility": {
+                "lineage": self.lineage_compatible,
+                "specialization": self.specialization_compatible,
+                "validation": self.validation_acceptable,
+                "comparison": self.comparison_acceptable,
+            },
+            "recommendation": self.recommendation,
+            "reason": self.reason,
+            "action_hints": {
+                "can_promote_later": self.can_promote_later,
+                "needs_review": self.needs_review,
+                "expiration_hint": self.expiration_hint,
+            },
+            "staging_ref": self.original_staging_ref,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "TriageAssessment":
+        """Create from dictionary."""
+        identity = data.get("identity", {})
+        triage = data.get("triage", {})
+        readiness = data.get("readiness", {})
+        compat = data.get("compatibility", {})
+        action = data.get("action_hints", {})
+
+        status_str = triage.get("status", "reject")
+        status = TriageStatus(status_str) if status_str in ["ready", "hold", "downgrade", "reject"] else TriageStatus.REJECT
+
+        return cls(
+            adapter_id=identity.get("adapter_id", ""),
+            generation=identity.get("generation", 0),
+            source_node=identity.get("source_node"),
+            triage_status=status,
+            triage_version=triage.get("version", "1.0"),
+            triaged_at=triage.get("triaged_at", ""),
+            readiness=ReadinessSummary(
+                readiness_score=readiness.get("score", 0.0),
+                lineage_score=readiness.get("lineage_score", 0.0),
+                specialization_score=readiness.get("specialization_score", 0.0),
+                validation_score=readiness.get("validation_score", 0.0),
+                comparison_score=readiness.get("comparison_score", 0.0),
+                recency_score=readiness.get("recency_score", 0.0),
+                is_fresh=readiness.get("is_fresh", False),
+                is_compatible=readiness.get("is_compatible", False),
+                is_priority=readiness.get("is_priority", False),
+                score_reason=readiness.get("reason", ""),
+            ),
+            lineage_compatible=compat.get("lineage", False),
+            specialization_compatible=compat.get("specialization", False),
+            validation_acceptable=compat.get("validation", False),
+            comparison_acceptable=compat.get("comparison", False),
+            recommendation=data.get("recommendation", "reject"),
+            reason=data.get("reason", ""),
+            can_promote_later=action.get("can_promote_later", False),
+            needs_review=action.get("needs_review", False),
+            expiration_hint=action.get("expiration_hint"),
+            original_staging_ref=data.get("staging_ref", ""),
+        )
+
+    def is_ready(self) -> bool:
+        """Check if triage status is ready."""
+        return self.triage_status == TriageStatus.READY
+
+    def is_hold(self) -> bool:
+        """Check if triage status is hold."""
+        return self.triage_status == TriageStatus.HOLD
+
+    def is_downgrade(self) -> bool:
+        """Check if triage status is downgrade."""
+        return self.triage_status == TriageStatus.DOWNGRADE
+
+    def is_reject(self) -> bool:
+        """Check if triage status is reject."""
+        return self.triage_status == TriageStatus.REJECT
+
+    def can_use_for_federation(self) -> bool:
+        """Check if this staged summary can be used for federation."""
+        return self.triage_status in (TriageStatus.READY, TriageStatus.HOLD)
+
+
+@dataclass
+class TriageResult:
+    """Phase 13: Complete triage result.
+
+    Includes triage assessment and routing information.
+    """
+    # Processing metadata
+    processed_at: str
+    processor_version: str
+    fallback_used: bool
+
+    # Triage assessment
+    assessment: TriageAssessment
+
+    # Routing information
+    target_pool: str  # "ready", "hold", "downgraded", "rejected"
+    priority: int  # 0-100 priority score
+
+    # Audit
+    trace_id: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to JSON-friendly dictionary."""
+        return {
+            "processed_at": self.processed_at,
+            "processor_version": self.processor_version,
+            "fallback_used": self.fallback_used,
+            "assessment": self.assessment.to_dict(),
+            "routing": {
+                "target_pool": self.target_pool,
+                "priority": self.priority,
+            },
+            "trace_id": self.trace_id,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "TriageResult":
+        """Create from dictionary."""
+        routing = data.get("routing", {})
+        return cls(
+            processed_at=data.get("processed_at", ""),
+            processor_version=data.get("processor_version", "1.0"),
+            fallback_used=data.get("fallback_used", False),
+            assessment=TriageAssessment.from_dict(data.get("assessment", {})),
+            target_pool=routing.get("target_pool", "rejected"),
+            priority=routing.get("priority", 0),
+            trace_id=data.get("trace_id", ""),
+        )

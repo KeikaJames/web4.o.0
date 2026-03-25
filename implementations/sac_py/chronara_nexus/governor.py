@@ -44,6 +44,8 @@ class ValidationTrace:
         self.exchange_gate_summary: Optional[Dict[str, Any]] = None
         # Phase 12: Staged remote summary
         self.staged_remote_summary: Optional[Dict[str, Any]] = None
+        # Phase 13: Triage result summary
+        self.triage_result_summary: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         result = {
@@ -71,6 +73,8 @@ class ValidationTrace:
             result["exchange_gate_summary"] = self.exchange_gate_summary
         if self.staged_remote_summary:
             result["staged_remote_summary"] = self.staged_remote_summary
+        if self.triage_result_summary:
+            result["triage_result_summary"] = self.triage_result_summary
         return result
 
 
@@ -1239,3 +1243,147 @@ class Governor:
             if hasattr(trace, 'staged_remote_summary') and trace.staged_remote_summary:
                 staged.append(trace.staged_remote_summary)
         return staged
+
+    def triage_staged_candidate(
+        self,
+        staged_candidate: "StagedRemoteCandidate",
+    ) -> "TriageResult":
+        """Triage a staged remote candidate for readiness.
+
+        Phase 13: Main entry point for remote summary triage.
+        Safe to call during serve path - never blocks or raises.
+
+        Args:
+            staged_candidate: Staged remote candidate to triage
+
+        Returns:
+            TriageResult with full assessment and routing
+        """
+        from .triage_engine import RemoteTriageEngine
+
+        try:
+            # Extract local summary for comparison
+            local_summary = self.extract_federation_summary()
+
+            # Perform triage
+            result = RemoteTriageEngine.triage(
+                staged_candidate=staged_candidate,
+                local_summary=local_summary,
+                fallback_on_error=True,
+            )
+
+            # Record in traces
+            self._record_triage_result(result)
+
+            return result
+
+        except Exception as e:
+            # Failure safety: return reject result
+            return self._fallback_triage_result(staged_candidate, str(e))
+
+    def _record_triage_result(self, result: "TriageResult") -> bool:
+        """Record triage result in validation traces.
+
+        Phase 13: Audit trail for triage decisions.
+        """
+        try:
+            if self._validation_traces and len(self._validation_traces) > 0:
+                last_trace = self._validation_traces[-1]
+                if not hasattr(last_trace, 'triage_result_summary'):
+                    last_trace.triage_result_summary = {}
+                last_trace.triage_result_summary = {
+                    "adapter_id": result.assessment.adapter_id,
+                    "generation": result.assessment.generation,
+                    "status": result.assessment.triage_status.value,
+                    "readiness_score": result.assessment.readiness.readiness_score,
+                    "target_pool": result.target_pool,
+                    "priority": result.priority,
+                }
+            return True
+        except Exception:
+            return False
+
+    def _fallback_triage_result(
+        self,
+        staged_candidate: Optional["StagedRemoteCandidate"],
+        error_message: str,
+    ) -> "TriageResult":
+        """Create fallback triage result on error."""
+        from datetime import datetime
+        from .types import (
+            TriageResult,
+            TriageAssessment,
+            TriageStatus,
+            ReadinessSummary,
+        )
+        import uuid
+
+        processed_at = datetime.utcnow().isoformat() + "Z"
+
+        assessment = TriageAssessment(
+            adapter_id=staged_candidate.adapter_id if staged_candidate else "unknown",
+            generation=staged_candidate.generation if staged_candidate else 0,
+            source_node=staged_candidate.source_node if staged_candidate else None,
+            triage_status=TriageStatus.REJECT,
+            triage_version="1.0",
+            triaged_at=processed_at,
+            readiness=ReadinessSummary(
+                readiness_score=0.0,
+                lineage_score=0.0,
+                specialization_score=0.0,
+                validation_score=0.0,
+                comparison_score=0.0,
+                recency_score=0.0,
+                is_fresh=False,
+                is_compatible=False,
+                is_priority=False,
+                score_reason=f"governor_error:{error_message}",
+            ),
+            lineage_compatible=False,
+            specialization_compatible=False,
+            validation_acceptable=False,
+            comparison_acceptable=False,
+            recommendation="reject_governor_error",
+            reason=f"Governor triage error: {error_message}",
+            can_promote_later=False,
+            needs_review=False,
+            expiration_hint=None,
+            original_staging_ref=staged_candidate.intake_record_ref if staged_candidate else "",
+        )
+
+        return TriageResult(
+            processed_at=processed_at,
+            processor_version="1.0",
+            fallback_used=True,
+            assessment=assessment,
+            target_pool="rejected",
+            priority=0,
+            trace_id=str(uuid.uuid4())[:8],
+        )
+
+    def get_ready_remote_candidates(self) -> List[Dict[str, Any]]:
+        """Get all ready remote candidates from triage history.
+
+        Phase 13: Retrieve candidates marked as ready for federation.
+        """
+        ready = []
+        for trace in self._validation_traces:
+            if hasattr(trace, 'triage_result_summary') and trace.triage_result_summary:
+                if trace.triage_result_summary.get('status') == 'ready':
+                    ready.append(trace.triage_result_summary)
+        return ready
+
+    def quick_readiness_check(
+        self,
+        staged_candidate: "StagedRemoteCandidate",
+    ) -> bool:
+        """Quick check if staged candidate is ready for federation.
+
+        Phase 13: Fast path for simple ready/not-ready decisions.
+        """
+        from .triage_engine import RemoteTriageEngine
+
+        try:
+            return RemoteTriageEngine.quick_readiness_check(staged_candidate)
+        except Exception:
+            return False
