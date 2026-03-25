@@ -46,6 +46,8 @@ class ValidationTrace:
         self.staged_remote_summary: Optional[Dict[str, Any]] = None
         # Phase 13: Triage result summary
         self.triage_result_summary: Optional[Dict[str, Any]] = None
+        # Phase 14: Lifecycle result summary
+        self.lifecycle_result_summary: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         result = {
@@ -75,6 +77,8 @@ class ValidationTrace:
             result["staged_remote_summary"] = self.staged_remote_summary
         if self.triage_result_summary:
             result["triage_result_summary"] = self.triage_result_summary
+        if self.lifecycle_result_summary:
+            result["lifecycle_result_summary"] = self.lifecycle_result_summary
         return result
 
 
@@ -1387,3 +1391,179 @@ class Governor:
             return RemoteTriageEngine.quick_readiness_check(staged_candidate)
         except Exception:
             return False
+
+    def evaluate_lifecycle(
+        self,
+        triage_result: "TriageResult",
+        previous_meta: Optional["LifecycleMeta"] = None,
+    ) -> "LifecycleResult":
+        """Evaluate lifecycle for a triaged remote candidate.
+
+        Phase 14: Main entry point for lifecycle evaluation.
+        Safe to call during serve path - never blocks or raises.
+
+        Args:
+            triage_result: The triage result to evaluate
+            previous_meta: Optional previous lifecycle metadata
+
+        Returns:
+            LifecycleResult with lifecycle metadata and transition info
+        """
+        from .lifecycle_engine import TriagePoolLifecycle
+
+        try:
+            result = TriagePoolLifecycle.evaluate(
+                triage_result=triage_result,
+                previous_meta=previous_meta,
+                fallback_on_error=True,
+            )
+
+            # Ensure we have a trace to record to
+            if not self._validation_traces:
+                # Create minimal trace for lifecycle recording
+                self._validation_traces.append(ValidationTrace(
+                    active=self.active_adapter,
+                    candidate=None,
+                    status="lifecycle",
+                    passed=True,
+                    reason="Lifecycle evaluation trace",
+                ))
+
+            # Record in traces
+            self._record_lifecycle_result(result)
+
+            return result
+
+        except Exception as e:
+            return self._fallback_lifecycle_result(triage_result, previous_meta, str(e))
+
+    def _record_lifecycle_result(self, result: "LifecycleResult") -> bool:
+        """Record lifecycle result in validation traces.
+
+        Phase 14: Audit trail for lifecycle decisions.
+        """
+        try:
+            if self._validation_traces and len(self._validation_traces) > 0:
+                last_trace = self._validation_traces[-1]
+                if not hasattr(last_trace, 'lifecycle_result_summary'):
+                    last_trace.lifecycle_result_summary = {}
+                last_trace.lifecycle_result_summary = {
+                    "adapter_id": result.meta.adapter_id,
+                    "generation": result.meta.generation,
+                    "state": result.meta.state.value,
+                    "decision": result.meta.decision.value,
+                    "ttl_remaining": result.meta.ttl_remaining,
+                    "freshness": result.meta.freshness_score,
+                    "priority": result.meta.priority_score,
+                    "state_changed": result.state_changed,
+                    "needs_cleanup": result.needs_cleanup,
+                }
+            return True
+        except Exception:
+            return False
+
+    def _fallback_lifecycle_result(
+        self,
+        triage_result: Optional["TriageResult"],
+        previous_meta: Optional["LifecycleMeta"],
+        error_message: str,
+    ) -> "LifecycleResult":
+        """Create fallback lifecycle result on error."""
+        from datetime import datetime
+        from .lifecycle_engine import LifecycleResult, LifecycleMeta, LifecycleState, LifecycleDecision
+        import uuid
+
+        processed_at = datetime.utcnow().isoformat() + "Z"
+
+        assessment = triage_result.assessment if triage_result else None
+
+        meta = LifecycleMeta(
+            adapter_id=assessment.adapter_id if assessment else "unknown",
+            generation=assessment.generation if assessment else 0,
+            source_node=assessment.source_node if assessment else None,
+            state=LifecycleState.EXPIRED,
+            entered_at=processed_at,
+            last_reviewed_at=processed_at,
+            expires_at=None,
+            ttl_hours=0,
+            ttl_remaining=0.0,
+            freshness_score=0.0,
+            priority_score=0,
+            priority_changed=False,
+            decision=LifecycleDecision.EXPIRE,
+            decision_reason=f"Governor lifecycle error: {error_message}",
+            fallback_used=True,
+            version="1.0",
+            reviewed_at=processed_at,
+        )
+
+        return LifecycleResult(
+            processed_at=processed_at,
+            processor_version="1.0",
+            fallback_used=True,
+            meta=meta,
+            previous_state=previous_meta.state if previous_meta else None,
+            state_changed=True,
+            needs_cleanup=True,
+            needs_requeue=False,
+            trace_id=str(uuid.uuid4())[:8],
+        )
+
+    def get_active_lifecycle_candidates(self) -> List[Dict[str, Any]]:
+        """Get all active lifecycle candidates from trace history.
+
+        Phase 14: Retrieve candidates still in active pool.
+        """
+        active = []
+        for trace in self._validation_traces:
+            if hasattr(trace, 'lifecycle_result_summary') and trace.lifecycle_result_summary:
+                if trace.lifecycle_result_summary.get('state') in ('ready', 'hold', 'downgraded'):
+                    active.append(trace.lifecycle_result_summary)
+        return active
+
+    def get_expired_candidates(self) -> List[Dict[str, Any]]:
+        """Get all expired lifecycle candidates from trace history.
+
+        Phase 14: Retrieve candidates pending cleanup.
+        """
+        expired = []
+        for trace in self._validation_traces:
+            if hasattr(trace, 'lifecycle_result_summary') and trace.lifecycle_result_summary:
+                if trace.lifecycle_result_summary.get('state') in ('expired', 'evicted'):
+                    expired.append(trace.lifecycle_result_summary)
+        return expired
+
+    def quick_expiration_check(
+        self,
+        lifecycle_meta: "LifecycleMeta",
+    ) -> bool:
+        """Quick check if lifecycle candidate has expired.
+
+        Phase 14: Fast path for expiration checks.
+        """
+        from .lifecycle_engine import TriagePoolLifecycle
+
+        try:
+            return TriagePoolLifecycle.quick_expiration_check(lifecycle_meta)
+        except Exception:
+            return True  # Conservative: treat errors as expired
+
+    def can_promote_lifecycle_candidate(
+        self,
+        adapter_id: str,
+        generation: int,
+    ) -> bool:
+        """Check if a lifecycle candidate can be promoted.
+
+        Phase 14: Verify lifecycle state allows promotion.
+        """
+        for trace in self._validation_traces:
+            if hasattr(trace, 'lifecycle_result_summary') and trace.lifecycle_result_summary:
+                summary = trace.lifecycle_result_summary
+                if (summary.get('adapter_id') == adapter_id and
+                    summary.get('generation') == generation):
+                    # Must be ready state with positive TTL
+                    if summary.get('state') == 'ready' and summary.get('ttl_remaining', 0) > 0:
+                        return True
+                    return False
+        return False

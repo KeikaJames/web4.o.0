@@ -984,3 +984,149 @@ class SACContainer:
             return self._chronara_governor.quick_readiness_check(staged)
         except Exception:
             return False
+
+    def evaluate_remote_candidate_lifecycle(
+        self,
+        triage_result_dict: dict,
+        previous_meta_dict: Optional[dict] = None,
+    ) -> dict:
+        """Evaluate lifecycle for a triaged remote candidate.
+
+        Phase 14: High-level entry point for lifecycle evaluation.
+        Safe to call during serve path - never blocks or raises.
+
+        Args:
+            triage_result_dict: TriageResult as dictionary
+            previous_meta_dict: Optional LifecycleMeta as dictionary
+
+        Returns:
+            dict: LifecycleResult as dictionary
+        """
+        from chronara_nexus.types import (
+            TriageResult, LifecycleMeta, LifecycleResult,
+            LifecycleState, LifecycleDecision
+        )
+        from datetime import datetime
+        import uuid
+
+        try:
+            # Parse triage result
+            triage_result = TriageResult.from_dict(triage_result_dict)
+
+            # Parse previous meta if provided
+            previous_meta = None
+            if previous_meta_dict:
+                previous_meta = LifecycleMeta.from_dict(previous_meta_dict)
+
+            # Initialize if needed
+            if not hasattr(self, '_chronara_governor'):
+                self.init_chronara()
+
+            # Perform lifecycle evaluation
+            result = self._chronara_governor.evaluate_lifecycle(
+                triage_result=triage_result,
+                previous_meta=previous_meta,
+            )
+
+            return result.to_dict()
+
+        except Exception as e:
+            # Failure safety: return expire result
+            processed_at = datetime.utcnow().isoformat() + "Z"
+
+            assessment = triage_result_dict.get('assessment', {})
+            identity = assessment.get('identity', {})
+
+            meta = LifecycleMeta(
+                adapter_id=identity.get('adapter_id', 'unknown'),
+                generation=identity.get('generation', 0),
+                source_node=identity.get('source_node'),
+                state=LifecycleState.EXPIRED,
+                entered_at=processed_at,
+                last_reviewed_at=processed_at,
+                expires_at=None,
+                ttl_hours=0,
+                ttl_remaining=0.0,
+                freshness_score=0.0,
+                priority_score=0,
+                priority_changed=False,
+                decision=LifecycleDecision.EXPIRE,
+                decision_reason=f"SAC lifecycle error: {str(e)}",
+                fallback_used=True,
+                version="1.0",
+                reviewed_at=processed_at,
+            )
+
+            result = LifecycleResult(
+                processed_at=processed_at,
+                processor_version="1.0",
+                fallback_used=True,
+                meta=meta,
+                previous_state=None,
+                state_changed=True,
+                needs_cleanup=True,
+                needs_requeue=False,
+                trace_id=str(uuid.uuid4())[:8],
+            )
+            return result.to_dict()
+
+    def get_active_lifecycle_candidates(self) -> List[Dict[str, Any]]:
+        """Get all active lifecycle candidates.
+
+        Phase 14: Retrieve candidates still in active pool.
+        """
+        try:
+            if not hasattr(self, '_chronara_governor'):
+                self.init_chronara()
+
+            return self._chronara_governor.get_active_lifecycle_candidates()
+        except Exception:
+            return []
+
+    def get_expired_lifecycle_candidates(self) -> List[Dict[str, Any]]:
+        """Get all expired lifecycle candidates.
+
+        Phase 14: Retrieve candidates pending cleanup.
+        """
+        try:
+            if not hasattr(self, '_chronara_governor'):
+                self.init_chronara()
+
+            return self._chronara_governor.get_expired_candidates()
+        except Exception:
+            return []
+
+    def is_lifecycle_candidate_promotable(
+        self,
+        adapter_id: str,
+        generation: int,
+    ) -> bool:
+        """Check if a lifecycle candidate can be promoted.
+
+        Phase 14: Verify lifecycle state allows promotion.
+        """
+        try:
+            if not hasattr(self, '_chronara_governor'):
+                self.init_chronara()
+
+            return self._chronara_governor.can_promote_lifecycle_candidate(
+                adapter_id, generation
+            )
+        except Exception:
+            return False
+
+    def quick_lifecycle_expiration_check(
+        self,
+        lifecycle_meta_dict: dict,
+    ) -> bool:
+        """Quick check if lifecycle candidate has expired.
+
+        Phase 14: Fast path for expiration checks.
+        """
+        from chronara_nexus.types import LifecycleMeta, TriagePoolLifecycle
+
+        try:
+            meta = LifecycleMeta.from_dict(lifecycle_meta_dict)
+            return TriagePoolLifecycle.quick_expiration_check(meta)
+        except Exception:
+            return True  # Conservative: treat errors as expired

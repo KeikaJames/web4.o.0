@@ -1292,3 +1292,13 @@ class TriageResult:
             priority=routing.get("priority", 0),
             trace_id=data.get("trace_id", ""),
         )
+
+
+# Phase 14: Lifecycle types (re-export from lifecycle_engine for convenience)
+from .lifecycle_engine import (
+    LifecycleDecision,
+    LifecycleState,
+    LifecycleMeta,
+    LifecycleResult,
+    TriagePoolLifecycle,
+)
