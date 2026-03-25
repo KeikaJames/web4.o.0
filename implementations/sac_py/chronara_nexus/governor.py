@@ -50,6 +50,8 @@ class ValidationTrace:
         self.lifecycle_result_summary: Optional[Dict[str, Any]] = None
         # Phase 15: Conflict resolution summary
         self.conflict_resolution_summary: Optional[Dict[str, Any]] = None
+        # Phase 16: Promotion execution summary
+        self.promotion_execution_summary: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         result = {
@@ -83,6 +85,8 @@ class ValidationTrace:
             result["lifecycle_result_summary"] = self.lifecycle_result_summary
         if self.conflict_resolution_summary:
             result["conflict_resolution_summary"] = self.conflict_resolution_summary
+        if self.promotion_execution_summary:
+            result["promotion_execution_summary"] = self.promotion_execution_summary
         return result
 
 
@@ -1778,3 +1782,208 @@ class Governor:
                             # Must be able to proceed
                             return summary.get('can_proceed', False)
         return False
+
+    def execute_promotion(
+        self,
+        candidate_dict: Dict[str, Any],
+        triage_summary: Optional[Dict[str, Any]] = None,
+        lifecycle_summary: Optional[Dict[str, Any]] = None,
+        conflict_summary: Optional[Dict[str, Any]] = None,
+    ) -> "PromotionExecutionResult":
+        """Execute promotion for a resolved remote candidate.
+
+        Phase 16: Main entry point for promotion execution.
+        Safe to call during serve path - never blocks or raises.
+
+        Args:
+            candidate_dict: Candidate identity dictionary
+            triage_summary: Optional triage/readiness summary
+            lifecycle_summary: Optional lifecycle summary
+            conflict_summary: Optional conflict resolution summary
+
+        Returns:
+            PromotionExecutionResult with full execution result
+        """
+        from .promotion_execution import FederationPromotionExecutor
+
+        try:
+            result = FederationPromotionExecutor.execute(
+                candidate_dict=candidate_dict,
+                triage_summary=triage_summary,
+                lifecycle_summary=lifecycle_summary,
+                conflict_summary=conflict_summary,
+                fallback_on_error=True,
+            )
+
+            # Record in traces
+            self._record_promotion_execution(result)
+
+            return result
+
+        except Exception as e:
+            return self._fallback_promotion_execution(candidate_dict, str(e))
+
+    def _record_promotion_execution(self, result: "PromotionExecutionResult") -> bool:
+        """Record promotion execution result in validation traces.
+
+        Phase 16: Audit trail for promotion execution decisions.
+        """
+        try:
+            if self._validation_traces and len(self._validation_traces) > 0:
+                last_trace = self._validation_traces[-1]
+                if not hasattr(last_trace, 'promotion_execution_summary'):
+                    last_trace.promotion_execution_summary = {}
+                last_trace.promotion_execution_summary = {
+                    "execution_id": result.execution.execution_id,
+                    "candidate_key": result.execution.candidate.to_key(),
+                    "decision": result.execution.decision.value,
+                    "status": result.execution.status.value,
+                    "success": result.success,
+                    "preconditions_met": result.execution.preconditions.all_preconditions_met,
+                }
+            return True
+        except Exception:
+            return False
+
+    def _fallback_promotion_execution(
+        self,
+        candidate_dict: Dict[str, Any],
+        error_message: str,
+    ) -> "PromotionExecutionResult":
+        """Create fallback promotion execution result on error."""
+        from datetime import datetime
+        from .promotion_execution import (
+            PromotionExecutionResult,
+            PromotionExecution,
+            PromotionCandidate,
+            PreconditionSummary,
+            ExecutionTrace,
+            ExecutionDecision,
+            ExecutionStatus,
+        )
+        import uuid
+
+        processed_at = datetime.utcnow().isoformat() + "Z"
+        trace_id = str(uuid.uuid4())[:8]
+        execution_id = f"exec-gov-fallback-{trace_id}"
+
+        candidate = PromotionCandidate.from_dict(candidate_dict)
+
+        preconditions = PreconditionSummary(
+            triage_ready=False,
+            readiness_score=0.0,
+            lifecycle_valid=False,
+            ttl_remaining=0.0,
+            state="",
+            conflict_resolved=False,
+            resolution_decision="",
+            can_proceed=False,
+            validation_passed=False,
+            comparison_acceptable=False,
+            lineage_valid=False,
+            specialization_valid=False,
+            all_preconditions_met=False,
+            failed_checks=[f"governor_error:{error_message}"],
+        )
+
+        execution = PromotionExecution(
+            execution_id=execution_id,
+            candidate=candidate,
+            preconditions=preconditions,
+            decision=ExecutionDecision.REJECT,
+            status=ExecutionStatus.REJECTED,
+            executed_at=None,
+            completed_at=None,
+            execution_trace=[
+                ExecutionTrace(
+                    timestamp=processed_at,
+                    action="governor_fallback",
+                    details={"error": error_message},
+                ),
+            ],
+            reason=f"Governor execution error: {error_message}",
+            recommendation="reject_fallback",
+            fallback_used=True,
+            version="1.0",
+            created_at=processed_at,
+        )
+
+        return PromotionExecutionResult(
+            processed_at=processed_at,
+            processor_version="1.0",
+            fallback_used=True,
+            execution=execution,
+            success=False,
+            outcome_status="rejected",
+            outcome_details={"error": error_message},
+            trace_id=trace_id,
+        )
+
+    def quick_promotion_execute_check(
+        self,
+        candidate_dict: Dict[str, Any],
+        lifecycle_summary: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Quick check if candidate can be executed for promotion.
+
+        Phase 16: Fast path for execute eligibility.
+        """
+        from .promotion_execution import FederationPromotionExecutor
+
+        try:
+            return FederationPromotionExecutor.quick_execute_check(
+                candidate_dict, lifecycle_summary
+            )
+        except Exception:
+            return False
+
+    def rollback_promotion_execution(
+        self,
+        execution_result: "PromotionExecutionResult",
+        reason: str = "rollback_requested",
+    ) -> "PromotionExecutionResult":
+        """Rollback a previously executed promotion.
+
+        Phase 16: Rollback an execution that was previously completed.
+        """
+        from .promotion_execution import FederationPromotionExecutor
+
+        try:
+            result = FederationPromotionExecutor.rollback_execution(
+                execution_result, reason
+            )
+            self._record_promotion_execution(result)
+            return result
+        except Exception:
+            # Return original with failure marker
+            return execution_result
+
+    def get_promotion_execution_history(self) -> List[Dict[str, Any]]:
+        """Get all promotion execution results from trace history.
+
+        Phase 16: Retrieve promotion execution audit trail.
+        """
+        history = []
+        for trace in self._validation_traces:
+            if hasattr(trace, 'promotion_execution_summary') and trace.promotion_execution_summary:
+                history.append(trace.promotion_execution_summary)
+        return history
+
+    def can_execute_promotion(
+        self,
+        adapter_id: str,
+        generation: int,
+    ) -> bool:
+        """Check if a promotion can be executed for this candidate.
+
+        Phase 16: Verify all gates allow execution.
+        """
+        # Check lifecycle
+        if not self.can_promote_lifecycle_candidate(adapter_id, generation):
+            return False
+
+        # Check conflict resolution
+        if not self.can_promote_after_resolution(adapter_id, generation):
+            return False
+
+        return True

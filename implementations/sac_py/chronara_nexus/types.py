@@ -1317,3 +1317,15 @@ from .conflict_resolution import (
     ConflictResolutionResult,
     RemoteCandidateConflictResolver,
 )
+
+# Phase 16: Promotion execution types (re-export from promotion_execution for convenience)
+from .promotion_execution import (
+    ExecutionDecision,
+    ExecutionStatus,
+    PromotionCandidate,
+    PreconditionSummary,
+    ExecutionTrace,
+    PromotionExecution,
+    PromotionExecutionResult,
+    FederationPromotionExecutor,
+)

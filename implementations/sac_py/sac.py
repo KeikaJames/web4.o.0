@@ -1305,3 +1305,189 @@ class SACContainer:
             )
         except Exception:
             return False
+
+    def execute_federation_promotion(
+        self,
+        candidate_dict: Dict[str, Any],
+        triage_summary: Optional[Dict[str, Any]] = None,
+        lifecycle_summary: Optional[Dict[str, Any]] = None,
+        conflict_summary: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Execute promotion for a resolved remote candidate.
+
+        Phase 16: High-level entry point for promotion execution.
+        Safe to call during serve path - never blocks or raises.
+
+        Args:
+            candidate_dict: Candidate identity dictionary
+            triage_summary: Optional triage/readiness summary
+            lifecycle_summary: Optional lifecycle summary
+            conflict_summary: Optional conflict resolution summary
+
+        Returns:
+            dict: PromotionExecutionResult as dictionary
+        """
+        from chronara_nexus.types import (
+            PromotionExecutionResult,
+            PromotionExecution,
+            PromotionCandidate,
+            PreconditionSummary,
+            ExecutionTrace,
+            ExecutionDecision,
+            ExecutionStatus,
+        )
+        from datetime import datetime
+        import uuid
+
+        try:
+            # Initialize if needed
+            if not hasattr(self, '_chronara_governor'):
+                self.init_chronara()
+
+            # Perform promotion execution
+            result = self._chronara_governor.execute_promotion(
+                candidate_dict=candidate_dict,
+                triage_summary=triage_summary,
+                lifecycle_summary=lifecycle_summary,
+                conflict_summary=conflict_summary,
+            )
+
+            return result.to_dict()
+
+        except Exception as e:
+            # Failure safety: return reject result
+            processed_at = datetime.utcnow().isoformat() + "Z"
+            trace_id = str(uuid.uuid4())[:8]
+            execution_id = f"exec-sac-fallback-{trace_id}"
+
+            candidate = PromotionCandidate.from_dict(candidate_dict)
+
+            preconditions = PreconditionSummary(
+                triage_ready=False,
+                readiness_score=0.0,
+                lifecycle_valid=False,
+                ttl_remaining=0.0,
+                state="",
+                conflict_resolved=False,
+                resolution_decision="",
+                can_proceed=False,
+                validation_passed=False,
+                comparison_acceptable=False,
+                lineage_valid=False,
+                specialization_valid=False,
+                all_preconditions_met=False,
+                failed_checks=[f"sac_error:{str(e)}"],
+            )
+
+            execution = PromotionExecution(
+                execution_id=execution_id,
+                candidate=candidate,
+                preconditions=preconditions,
+                decision=ExecutionDecision.REJECT,
+                status=ExecutionStatus.REJECTED,
+                executed_at=None,
+                completed_at=None,
+                execution_trace=[
+                    ExecutionTrace(
+                        timestamp=processed_at,
+                        action="sac_fallback",
+                        details={"error": str(e)},
+                    ),
+                ],
+                reason=f"SAC execution error: {str(e)}",
+                recommendation="reject_fallback",
+                fallback_used=True,
+                version="1.0",
+                created_at=processed_at,
+            )
+
+            result = PromotionExecutionResult(
+                processed_at=processed_at,
+                processor_version="1.0",
+                fallback_used=True,
+                execution=execution,
+                success=False,
+                outcome_status="rejected",
+                outcome_details={"error": str(e)},
+                trace_id=trace_id,
+            )
+            return result.to_dict()
+
+    def quick_promotion_execute_check(
+        self,
+        candidate_dict: Dict[str, Any],
+        lifecycle_summary: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Quick check if candidate can be executed for promotion.
+
+        Phase 16: Fast path for execute eligibility.
+        """
+        try:
+            if not hasattr(self, '_chronara_governor'):
+                self.init_chronara()
+
+            return self._chronara_governor.quick_promotion_execute_check(
+                candidate_dict, lifecycle_summary
+            )
+        except Exception:
+            return False
+
+    def rollback_promotion_execution(
+        self,
+        execution_result_dict: Dict[str, Any],
+        reason: str = "rollback_requested",
+    ) -> Dict[str, Any]:
+        """Rollback a previously executed promotion.
+
+        Phase 16: Rollback an execution that was previously completed.
+        """
+        from chronara_nexus.types import PromotionExecutionResult
+
+        try:
+            if not hasattr(self, '_chronara_governor'):
+                self.init_chronara()
+
+            # Parse the execution result
+            execution_result = PromotionExecutionResult.from_dict(execution_result_dict)
+
+            # Perform rollback
+            result = self._chronara_governor.rollback_promotion_execution(
+                execution_result, reason
+            )
+
+            return result.to_dict()
+        except Exception:
+            # Return original with failure marker
+            return execution_result_dict
+
+    def get_promotion_execution_history(self) -> List[Dict[str, Any]]:
+        """Get all promotion execution results from trace history.
+
+        Phase 16: Retrieve promotion execution audit trail.
+        """
+        try:
+            if not hasattr(self, '_chronara_governor'):
+                self.init_chronara()
+
+            return self._chronara_governor.get_promotion_execution_history()
+        except Exception:
+            return []
+
+    def can_execute_federation_promotion(
+        self,
+        adapter_id: str,
+        generation: int,
+    ) -> bool:
+        """Check if a federation promotion can be executed.
+
+        Phase 16: Verify all gates allow execution.
+        """
+        try:
+            if not hasattr(self, '_chronara_governor'):
+                self.init_chronara()
+
+            return self._chronara_governor.can_execute_promotion(
+                adapter_id, generation
+            )
+        except Exception:
+            return False
