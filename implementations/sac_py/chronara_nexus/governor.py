@@ -48,6 +48,8 @@ class ValidationTrace:
         self.triage_result_summary: Optional[Dict[str, Any]] = None
         # Phase 14: Lifecycle result summary
         self.lifecycle_result_summary: Optional[Dict[str, Any]] = None
+        # Phase 15: Conflict resolution summary
+        self.conflict_resolution_summary: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         result = {
@@ -79,6 +81,8 @@ class ValidationTrace:
             result["triage_result_summary"] = self.triage_result_summary
         if self.lifecycle_result_summary:
             result["lifecycle_result_summary"] = self.lifecycle_result_summary
+        if self.conflict_resolution_summary:
+            result["conflict_resolution_summary"] = self.conflict_resolution_summary
         return result
 
 
@@ -1566,4 +1570,211 @@ class Governor:
                     if summary.get('state') == 'ready' and summary.get('ttl_remaining', 0) > 0:
                         return True
                     return False
+        return False
+
+    def resolve_candidate_conflicts(
+        self,
+        lifecycle_candidates: List[Dict[str, Any]],
+    ) -> "ConflictResolutionResult":
+        """Resolve conflicts among multiple lifecycle candidates.
+
+        Phase 15: Main entry point for conflict resolution.
+        Safe to call during serve path - never blocks or raises.
+
+        Args:
+            lifecycle_candidates: List of lifecycle metadata dictionaries
+
+        Returns:
+            ConflictResolutionResult with full conflict analysis and resolution
+        """
+        from .conflict_resolution import RemoteCandidateConflictResolver
+
+        try:
+            result = RemoteCandidateConflictResolver.resolve(
+                candidates=lifecycle_candidates,
+                fallback_on_error=True,
+            )
+
+            # Record in traces
+            self._record_conflict_resolution(result)
+
+            return result
+
+        except Exception as e:
+            return self._fallback_conflict_resolution(lifecycle_candidates, str(e))
+
+    def _record_conflict_resolution(self, result: "ConflictResolutionResult") -> bool:
+        """Record conflict resolution result in validation traces.
+
+        Phase 15: Audit trail for conflict resolution decisions.
+        """
+        try:
+            if self._validation_traces and len(self._validation_traces) > 0:
+                last_trace = self._validation_traces[-1]
+                if not hasattr(last_trace, 'conflict_resolution_summary'):
+                    last_trace.conflict_resolution_summary = {}
+                last_trace.conflict_resolution_summary = {
+                    "set_id": result.conflict_set.set_id,
+                    "candidate_count": result.conflict_set.candidate_count,
+                    "has_conflicts": result.conflict_set.has_conflicts,
+                    "conflict_count": result.conflict_set.conflict_count,
+                    "conflict_types": result.conflict_set.conflict_types,
+                    "resolution_decision": result.conflict_set.resolution_decision.value,
+                    "selected_candidate": result.conflict_set.get_selected_candidate_key(),
+                    "can_proceed": result.conflict_set.can_proceed(),
+                }
+            return True
+        except Exception:
+            return False
+
+    def _fallback_conflict_resolution(
+        self,
+        candidates: List[Dict[str, Any]],
+        error_message: str,
+    ) -> "ConflictResolutionResult":
+        """Create fallback conflict resolution result on error."""
+        from datetime import datetime
+        from .conflict_resolution import (
+            ConflictResolutionResult,
+            ConflictSet,
+            ConflictDetail,
+            ConflictType,
+            CandidateIdentity,
+            CandidateResolution,
+            CompatibilitySummary,
+            LifecycleSummary,
+            ValidationComparisonSummary,
+            ResolutionDecision,
+        )
+        import uuid
+
+        processed_at = datetime.utcnow().isoformat() + "Z"
+        trace_id = str(uuid.uuid4())[:8]
+
+        # Build minimal identities
+        identities = []
+        for c in candidates:
+            identity = c.get("identity", {})
+            identities.append(CandidateIdentity(
+                adapter_id=identity.get("adapter_id", "unknown"),
+                generation=identity.get("generation", 0),
+                source_node=identity.get("source_node"),
+            ))
+
+        # Build fallback resolutions (reject all)
+        resolutions = []
+        for identity in identities:
+            resolutions.append(CandidateResolution(
+                candidate_key=identity.to_key(),
+                adapter_id=identity.adapter_id,
+                generation=identity.generation,
+                selected=False,
+                downgraded=False,
+                rejected=True,
+                reason=f"Fallback due to error: {error_message}",
+            ))
+
+        conflict_set = ConflictSet(
+            set_id=f"conflict-fallback-{trace_id}",
+            candidate_count=len(candidates),
+            candidate_keys=[ci.to_key() for ci in identities],
+            has_conflicts=True,
+            conflict_count=1,
+            conflicts=[ConflictDetail(
+                conflict_type=ConflictType.VALIDATION_CONFLICT,
+                involved_candidates=[ci.to_key() for ci in identities],
+                severity="critical",
+                description=f"Resolution error: {error_message}",
+                resolution_hint="Fallback to reject all",
+            )],
+            conflict_types=["validation_conflict"],
+            compatibility=CompatibilitySummary(
+                lineage_compatible=False,
+                specialization_compatible=False,
+                validation_consistent=False,
+                lifecycle_consistent=False,
+                overall_compatible=False,
+                compatibility_score=0.0,
+            ),
+            lifecycle=LifecycleSummary(
+                min_freshness=0.0,
+                max_freshness=0.0,
+                avg_freshness=0.0,
+                min_priority=0,
+                max_priority=0,
+                avg_priority=0.0,
+                freshness_range=0.0,
+                priority_range=0,
+            ),
+            validation=ValidationComparisonSummary(
+                all_passed_validation=False,
+                any_passed_validation=False,
+                validation_score_range=0.0,
+                min_validation_score=0.0,
+                max_validation_score=0.0,
+                consensus_on_promotion=False,
+                promotion_recommendations=[],
+            ),
+            resolution_decision=ResolutionDecision.REJECT_ALL,
+            selected_candidate=None,
+            candidate_resolutions=resolutions,
+            resolution_reason=f"Fallback due to error: {error_message}",
+            recommendation="reject_all_fallback",
+            fallback_used=True,
+            version="1.0",
+            resolved_at=processed_at,
+        )
+
+        return ConflictResolutionResult(
+            processed_at=processed_at,
+            processor_version="1.0",
+            fallback_used=True,
+            conflict_set=conflict_set,
+            trace_id=trace_id,
+        )
+
+    def quick_conflict_check(self, lifecycle_candidates: List[Dict[str, Any]]) -> bool:
+        """Quick check if lifecycle candidates have conflicts.
+
+        Phase 15: Fast path for conflict detection.
+        """
+        from .conflict_resolution import RemoteCandidateConflictResolver
+
+        try:
+            return RemoteCandidateConflictResolver.quick_conflict_check(lifecycle_candidates)
+        except Exception:
+            return True  # Conservative: treat errors as conflict
+
+    def get_conflict_resolution_history(self) -> List[Dict[str, Any]]:
+        """Get all conflict resolution results from trace history.
+
+        Phase 15: Retrieve conflict resolution audit trail.
+        """
+        history = []
+        for trace in self._validation_traces:
+            if hasattr(trace, 'conflict_resolution_summary') and trace.conflict_resolution_summary:
+                history.append(trace.conflict_resolution_summary)
+        return history
+
+    def can_promote_after_resolution(
+        self,
+        adapter_id: str,
+        generation: int,
+    ) -> bool:
+        """Check if a candidate can be promoted after conflict resolution.
+
+        Phase 15: Verify resolution allows promotion of specific candidate.
+        """
+        for trace in self._validation_traces:
+            if hasattr(trace, 'conflict_resolution_summary') and trace.conflict_resolution_summary:
+                summary = trace.conflict_resolution_summary
+                # Check if this candidate was selected
+                selected = summary.get('selected_candidate')
+                if selected:
+                    selected_parts = selected.split(':')
+                    if len(selected_parts) == 2:
+                        sel_id, sel_gen = selected_parts
+                        if sel_id == adapter_id and int(sel_gen) == generation:
+                            # Must be able to proceed
+                            return summary.get('can_proceed', False)
         return False

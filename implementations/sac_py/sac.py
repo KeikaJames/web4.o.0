@@ -1130,3 +1130,178 @@ class SACContainer:
             return TriagePoolLifecycle.quick_expiration_check(meta)
         except Exception:
             return True  # Conservative: treat errors as expired
+
+    def resolve_remote_candidate_conflicts(
+        self,
+        lifecycle_candidates: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Resolve conflicts among multiple remote candidates.
+
+        Phase 15: High-level entry point for conflict resolution.
+        Safe to call during serve path - never blocks or raises.
+
+        Args:
+            lifecycle_candidates: List of lifecycle metadata dictionaries
+
+        Returns:
+            dict: ConflictResolutionResult as dictionary
+        """
+        from chronara_nexus.types import (
+            ConflictResolutionResult,
+            ConflictSet,
+            ConflictDetail,
+            ConflictType,
+            CandidateIdentity,
+            CandidateResolution,
+            CompatibilitySummary,
+            LifecycleSummary,
+            ValidationComparisonSummary,
+            ResolutionDecision,
+        )
+        from datetime import datetime
+        import uuid
+
+        try:
+            # Initialize if needed
+            if not hasattr(self, '_chronara_governor'):
+                self.init_chronara()
+
+            # Perform conflict resolution
+            result = self._chronara_governor.resolve_candidate_conflicts(
+                lifecycle_candidates=lifecycle_candidates,
+            )
+
+            return result.to_dict()
+
+        except Exception as e:
+            # Failure safety: return reject_all result
+            processed_at = datetime.utcnow().isoformat() + "Z"
+            trace_id = str(uuid.uuid4())[:8]
+
+            # Build minimal identities
+            identities = []
+            for c in lifecycle_candidates:
+                identity = c.get("identity", {})
+                identities.append(CandidateIdentity(
+                    adapter_id=identity.get("adapter_id", "unknown"),
+                    generation=identity.get("generation", 0),
+                    source_node=identity.get("source_node"),
+                ))
+
+            # Build fallback resolutions (reject all)
+            resolutions = []
+            for identity in identities:
+                resolutions.append(CandidateResolution(
+                    candidate_key=identity.to_key(),
+                    adapter_id=identity.adapter_id,
+                    generation=identity.generation,
+                    selected=False,
+                    downgraded=False,
+                    rejected=True,
+                    reason=f"SAC error: {str(e)}",
+                ))
+
+            conflict_set = ConflictSet(
+                set_id=f"conflict-sac-fallback-{trace_id}",
+                candidate_count=len(lifecycle_candidates),
+                candidate_keys=[ci.to_key() for ci in identities],
+                has_conflicts=True,
+                conflict_count=1,
+                conflicts=[ConflictDetail(
+                    conflict_type=ConflictType.VALIDATION_CONFLICT,
+                    involved_candidates=[ci.to_key() for ci in identities],
+                    severity="critical",
+                    description=f"SAC conflict resolution error: {str(e)}",
+                    resolution_hint="Fallback to reject all",
+                )],
+                conflict_types=["validation_conflict"],
+                compatibility=CompatibilitySummary(
+                    lineage_compatible=False,
+                    specialization_compatible=False,
+                    validation_consistent=False,
+                    lifecycle_consistent=False,
+                    overall_compatible=False,
+                    compatibility_score=0.0,
+                ),
+                lifecycle=LifecycleSummary(
+                    min_freshness=0.0,
+                    max_freshness=0.0,
+                    avg_freshness=0.0,
+                    min_priority=0,
+                    max_priority=0,
+                    avg_priority=0.0,
+                    freshness_range=0.0,
+                    priority_range=0,
+                ),
+                validation=ValidationComparisonSummary(
+                    all_passed_validation=False,
+                    any_passed_validation=False,
+                    validation_score_range=0.0,
+                    min_validation_score=0.0,
+                    max_validation_score=0.0,
+                    consensus_on_promotion=False,
+                    promotion_recommendations=[],
+                ),
+                resolution_decision=ResolutionDecision.REJECT_ALL,
+                selected_candidate=None,
+                candidate_resolutions=resolutions,
+                resolution_reason=f"SAC error: {str(e)}",
+                recommendation="reject_all_fallback",
+                fallback_used=True,
+                version="1.0",
+                resolved_at=processed_at,
+            )
+
+            result = ConflictResolutionResult(
+                processed_at=processed_at,
+                processor_version="1.0",
+                fallback_used=True,
+                conflict_set=conflict_set,
+                trace_id=trace_id,
+            )
+            return result.to_dict()
+
+    def quick_conflict_check(self, lifecycle_candidates: List[Dict[str, Any]]) -> bool:
+        """Quick check if lifecycle candidates have conflicts.
+
+        Phase 15: Fast path for conflict detection.
+        """
+        try:
+            if not hasattr(self, '_chronara_governor'):
+                self.init_chronara()
+
+            return self._chronara_governor.quick_conflict_check(lifecycle_candidates)
+        except Exception:
+            return True  # Conservative: treat errors as conflict
+
+    def get_conflict_resolution_history(self) -> List[Dict[str, Any]]:
+        """Get all conflict resolution results from trace history.
+
+        Phase 15: Retrieve conflict resolution audit trail.
+        """
+        try:
+            if not hasattr(self, '_chronara_governor'):
+                self.init_chronara()
+
+            return self._chronara_governor.get_conflict_resolution_history()
+        except Exception:
+            return []
+
+    def can_promote_after_resolution(
+        self,
+        adapter_id: str,
+        generation: int,
+    ) -> bool:
+        """Check if a candidate can be promoted after conflict resolution.
+
+        Phase 15: Verify resolution allows promotion of specific candidate.
+        """
+        try:
+            if not hasattr(self, '_chronara_governor'):
+                self.init_chronara()
+
+            return self._chronara_governor.can_promote_after_resolution(
+                adapter_id, generation
+            )
+        except Exception:
+            return False

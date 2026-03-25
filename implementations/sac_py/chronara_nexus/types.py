@@ -1302,3 +1302,18 @@ from .lifecycle_engine import (
     LifecycleResult,
     TriagePoolLifecycle,
 )
+
+# Phase 15: Conflict resolution types (re-export from conflict_resolution for convenience)
+from .conflict_resolution import (
+    ConflictType,
+    ResolutionDecision,
+    CandidateIdentity,
+    ConflictDetail,
+    CompatibilitySummary,
+    LifecycleSummary,
+    ValidationComparisonSummary,
+    CandidateResolution,
+    ConflictSet,
+    ConflictResolutionResult,
+    RemoteCandidateConflictResolver,
+)
