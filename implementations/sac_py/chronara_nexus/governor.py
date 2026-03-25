@@ -1987,3 +1987,97 @@ class Governor:
             return False
 
         return True
+
+    def emit_federation_event(
+        self,
+        event_type: str,
+        adapter_id: str,
+        generation: int,
+        source_node: Optional[str],
+        result_data: Dict[str, Any],
+    ) -> Optional["FederationEvent"]:
+        """Emit federation event for pipeline stage.
+
+        Phase 17: Event emission entry point.
+        """
+        from .event_stream import FederationEventEmitter, EventType
+
+        try:
+            emitter = FederationEventEmitter()
+
+            # Map event type string to EventType
+            event_type_map = {
+                "summary_intaken": EventType.SUMMARY_INTAKEN,
+                "candidate_staged": EventType.CANDIDATE_STAGED,
+                "triage_decided": EventType.TRIAGE_DECIDED,
+                "lifecycle_updated": EventType.LIFECYCLE_UPDATED,
+                "conflict_resolved": EventType.CONFLICT_RESOLVED,
+                "promotion_executed": EventType.PROMOTION_EXECUTED,
+                "promotion_deferred": EventType.PROMOTION_DEFERRED,
+                "promotion_rejected": EventType.PROMOTION_REJECTED,
+                "promotion_rolled_back": EventType.PROMOTION_ROLLED_BACK,
+            }
+
+            et = event_type_map.get(event_type, EventType.SUMMARY_INTAKEN)
+
+            # Call appropriate emit method
+            if et == EventType.SUMMARY_INTAKEN:
+                return emitter.emit_summary_intaken(
+                    adapter_id, generation, source_node, result_data
+                )
+            elif et == EventType.CANDIDATE_STAGED:
+                return emitter.emit_candidate_staged(
+                    adapter_id, generation, source_node, result_data
+                )
+            elif et == EventType.TRIAGE_DECIDED:
+                return emitter.emit_triage_decided(
+                    adapter_id, generation, source_node, result_data
+                )
+            elif et == EventType.LIFECYCLE_UPDATED:
+                return emitter.emit_lifecycle_updated(
+                    adapter_id, generation, source_node, result_data
+                )
+            elif et == EventType.CONFLICT_RESOLVED:
+                return emitter.emit_conflict_resolved(
+                    adapter_id, generation, source_node, result_data
+                )
+            elif et == EventType.PROMOTION_EXECUTED:
+                return emitter.emit_promotion_executed(
+                    adapter_id, generation, source_node, result_data
+                )
+            elif et == EventType.PROMOTION_DEFERRED:
+                return emitter.emit_promotion_deferred(
+                    adapter_id, generation, source_node, result_data
+                )
+            elif et == EventType.PROMOTION_REJECTED:
+                return emitter.emit_promotion_rejected(
+                    adapter_id, generation, source_node, result_data
+                )
+            elif et == EventType.PROMOTION_ROLLED_BACK:
+                return emitter.emit_promotion_rolled_back(
+                    adapter_id, generation, source_node, result_data
+                )
+
+            return None
+        except Exception:
+            return None
+
+    def get_federation_event_stream(
+        self,
+        adapter_id: str,
+        generation: int,
+    ) -> Optional[Dict[str, Any]]:
+        """Get federation event stream for candidate.
+
+        Phase 17: Retrieve event history.
+        """
+        from .event_stream import FederationEventEmitter
+
+        try:
+            emitter = FederationEventEmitter()
+            stream = emitter.get_stream(adapter_id, generation)
+            if stream:
+                return stream.to_dict()
+            return None
+        except Exception:
+            return None

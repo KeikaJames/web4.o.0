@@ -1329,3 +1329,13 @@ from .promotion_execution import (
     PromotionExecutionResult,
     FederationPromotionExecutor,
 )
+
+# Phase 17: Event streaming types (re-export from event_stream for convenience)
+from .event_stream import (
+    EventType,
+    EventContext,
+    EventPayload,
+    FederationEvent,
+    EventStream,
+    FederationEventEmitter,
+)
