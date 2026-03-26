@@ -28,10 +28,11 @@ from .types import (
     SnapshotLineageSummary,
 )
 from .exchange_gate import FederationExchangeComparator
+from .common import utc_now
 
 
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+# Backwards compatibility: _utc_now is now utc_now from common module
+_utc_now = utc_now
 
 
 class RemoteIntakeProcessor:

@@ -16,6 +16,7 @@ from .types import (
     ValidationCompatibility,
     ComparisonCompatibility,
 )
+from .common import utc_now
 
 
 class FederationExchangeComparator:
@@ -38,7 +39,8 @@ class FederationExchangeComparator:
 
     @staticmethod
     def _utc_now() -> str:
-        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        """Generate UTC timestamp - delegates to common.utc_now for consistency."""
+        return utc_now()
 
     @classmethod
     def compare(

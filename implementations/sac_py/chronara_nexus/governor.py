@@ -4,10 +4,11 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from .types import AdapterRef, ValidationReport, AdapterMode, AdapterSpecialization, AdapterSelection
 from .deliberation import DeliberationOutcome
+from .common import utc_now, CommonMetadata, DecisionThresholds
 
 
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+# Backwards compatibility: _utc_now is now utc_now from common module
+_utc_now = utc_now
 
 
 class ValidationTrace:
