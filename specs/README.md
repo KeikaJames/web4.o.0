@@ -20,25 +20,20 @@ They will evolve through RFC proposals and community feedback.
 
 Defines how users own and control their Agents.
 
-### 2. Intent Interface Protocol (IIP)
-[intent-interface-protocol.md](intent-interface-protocol.md)
-
-Defines how Agents discover and invoke services by capability.
-
-### 3. Open Compute Interface (OCI)
-[open-compute-interface.md](open-compute-interface.md)
-
-Defines how Agents access compute resources without platform lock-in.
-
-### 4. Federated Intelligence Layer (FIL)
-[federated-intelligence-layer.md](federated-intelligence-layer.md)
-
-Defines how collective intelligence circulates without centralization.
-
-### 5. Compatibility Layer
+### 2. Compatibility Layer
 [compatibility-layer.md](compatibility-layer.md)
 
 Defines how Efferva interoperates with existing systems.
+
+## Planned Specifications
+
+The repository README and implementation tree reference additional protocol areas
+that do not yet have first-draft spec files in this directory:
+- Intent Interface Protocol (IIP)
+- Open Compute Interface (OCI)
+- Federated Intelligence Layer (FIL)
+
+These remain planned, not published specs.
 
 ---
 

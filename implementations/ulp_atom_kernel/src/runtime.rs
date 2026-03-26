@@ -403,6 +403,8 @@ pub async fn claim_slot_http_with_hints(
     prefer_kv: bool,
     handoff_id: Option<&str>,
 ) -> Result<ClaimedSlot, String> {
+    const CLAIM_RETRY_BACKOFF_MS: u64 = 15;
+
     let candidates = pool.candidates_with_hints(kind, region, prefer_kv, handoff_id);
     if candidates.is_empty() {
         return Err("discovery pool: no candidates available".to_string());
@@ -424,34 +426,51 @@ pub async fn claim_slot_http_with_hints(
             last_err = format!("timeout before claim to '{}'", offer.node_id);
             continue;
         }
-
-        let claim = SlotClaim {
-            home_node_id: home_node_id.to_string(),
-            target_node_id: offer.node_id.clone(),
-            nonce: nonce.clone(),
-            requested_kind: kind.clone(),
-            timeout_ms: timeout.remaining_ms(),
-        };
         let claim_url = slot_claim_endpoint(endpoint)?;
 
-        match client.claim_slot(&claim_url, &claim).await {
-            Ok(response) => match response.verify_nonce(&claim) {
-                Ok(()) => {
-                    return Ok(ClaimedSlot {
-                        offer: (*offer).clone(),
-                        claim,
-                        attempts: attempt + 1,
-                    });
-                }
+        loop {
+            let remaining_ms = timeout.remaining_ms();
+            if remaining_ms == 0 {
+                last_err = format!("candidate '{}': slot claim timeout budget exhausted", offer.node_id);
+                break;
+            }
+
+            let claim = SlotClaim {
+                home_node_id: home_node_id.to_string(),
+                target_node_id: offer.node_id.clone(),
+                nonce: nonce.clone(),
+                requested_kind: kind.clone(),
+                timeout_ms: remaining_ms,
+            };
+
+            match client.claim_slot(&claim_url, &claim).await {
+                Ok(response) => match response.verify_nonce(&claim) {
+                    Ok(()) => {
+                        return Ok(ClaimedSlot {
+                            offer: (*offer).clone(),
+                            claim,
+                            attempts: attempt + 1,
+                        });
+                    }
+                    Err(e) => {
+                        last_err = format!("candidate '{}': {}", offer.node_id, e);
+                        break;
+                    }
+                },
                 Err(e) => {
                     last_err = format!("candidate '{}': {}", offer.node_id, e);
+                    if !is_retryable_claim_error(&e) || remaining_ms <= CLAIM_RETRY_BACKOFF_MS {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(CLAIM_RETRY_BACKOFF_MS)).await;
                 }
-            },
-            Err(e) => {
-                last_err = format!("candidate '{}': {}", offer.node_id, e);
             }
         }
     }
 
     Err(format!("all candidates failed: {}", last_err))
+}
+
+fn is_retryable_claim_error(error: &str) -> bool {
+    error.starts_with("slot claim send:") || error.starts_with("slot claim timeout:")
 }

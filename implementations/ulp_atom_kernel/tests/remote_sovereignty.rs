@@ -159,7 +159,7 @@ fn decode_atom(id: &str) -> ComputeAtom {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn home_node_executes_blinded_request_over_http_and_unblinds() {
     let (endpoint, handle) =
         spawn_router(app_with_backend("eph-good", Box::new(EchoBackend))).await;
@@ -187,7 +187,7 @@ async fn home_node_executes_blinded_request_over_http_and_unblinds() {
     handle.abort();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn timeout_retries_next_remote_candidate() {
     let (slow_endpoint, slow_handle) = spawn_router(faulty_app("slow-node", 0, 200)).await;
     let (fast_endpoint, fast_handle) =
@@ -217,7 +217,7 @@ async fn timeout_retries_next_remote_candidate() {
     fast_handle.abort();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn nonce_mismatch_rejected_and_retried() {
     let (bad_endpoint, bad_handle) = spawn_router(faulty_app("bad-node", 1, 0)).await;
     let (good_endpoint, good_handle) =
@@ -247,7 +247,7 @@ async fn nonce_mismatch_rejected_and_retried() {
     good_handle.abort();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_stage_remote_runtime_pipeline_flows_prefill_into_decode() {
     let (prefill_endpoint, prefill_handle) =
         spawn_router(app_with_backend("prefill-node", Box::new(EchoBackend))).await;

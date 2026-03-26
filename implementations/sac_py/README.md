@@ -7,11 +7,13 @@ Minimal, local-first prototype implementation of the Sovereign Agent Container s
 This is a reference implementation that validates the object boundaries defined in [specs/sovereign-agent-container.md](../../specs/sovereign-agent-container.md).
 
 It implements:
-- Core SAC objects (RootKeyMaterial, PersonaConfig, MemoryRoot, PermissionCage, DerivedAgent)
+- Core SAC objects (RootKeyMaterial, MemoryRoot, PermissionCage, DerivedAgent)
 - Local JSON storage
 - Basic operations (create, load, derive-agent, rotate-key, export-metadata, check-permission)
+- Encrypted-at-rest container serialization with passphrase-derived keys
 - Minimal CLI
 - Test coverage
+- `chronara_nexus/` governance and pre-federation prototype layers
 
 ## What This Is Not
 
@@ -34,7 +36,7 @@ This is NOT:
 
 **Scope**: Local-only. No network, no cloud, no distributed features.
 
-**Permission Model**: Minimal prototype covering financial limits, data scopes, confirmation requirements. Not exhaustive.
+**Permission Model**: Minimal prototype covering `file.write`, `financial.transaction`, financial limits, and confirmation requirements. Not exhaustive.
 
 ## Installation
 
@@ -95,14 +97,9 @@ python -m implementations.sac_py.cli check-permission ./my-sac.json \
   --operation "financial.transaction" \
   --amount 500.0
 
-# Check data access
-python -m implementations.sac_py.cli check-permission ./my-sac.json \
-  --operation "data.read" \
-  --scope "calendar"
-
 # Check with confirmation
 python -m implementations.sac_py.cli check-permission ./my-sac.json \
-  --operation "delete.account" \
+  --operation "file.write" \
   --confirmed
 ```
 
@@ -124,8 +121,9 @@ implementations/sac_py/
 ├── __main__.py          # CLI entry point
 ├── sac.py               # Core SAC implementation
 ├── cli.py               # CLI commands
+├── chronara_nexus/      # Chronara governance / federation prototype layers
 ├── tests/
-│   └── test_sac.py      # Test suite
+│   └── ...              # SAC + Chronara test suites
 └── README.md            # This file
 ```
 
@@ -137,16 +135,13 @@ Main container holding all SAC state.
 ### RootKeyMaterial
 Root key for sovereignty. Never exported in metadata.
 
-### PersonaConfig
-Agent behavior and boundaries configuration.
-
 ### MemoryRoot
 Encrypted reference to user's memory store.
 
 ### PermissionCage
 Defines what Agent can do. Supports:
 - Financial limits (daily, single transaction)
-- Data scopes (allowed, blocked)
+- Explicit allowed operations (`file.write`, `financial.transaction`)
 - Confirmation requirements
 
 ### DerivedAgent
@@ -155,11 +150,11 @@ Child agent with limited scope. Can be revoked.
 ## Security Notes
 
 **PROTOTYPE ONLY**:
-- Root key stored in JSON file (not secure for production)
-- Simple HMAC-based key derivation (not final design)
+- Root key material is serialized only inside the encrypted container envelope
+- Simple HMAC-based key derivation and stream construction (not final design)
 - No hardware key binding
 - No social recovery implementation
-- No encryption at rest
+- No formally reviewed cryptographic design
 
 **For production**, would need:
 - Proper secret storage (OS keychain, hardware key, etc.)

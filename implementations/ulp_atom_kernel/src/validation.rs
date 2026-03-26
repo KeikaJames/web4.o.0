@@ -143,7 +143,7 @@ impl ValidationResult {
         output_match: bool,
         kv_count_match: bool,
     ) -> Self {
-        let specialization_valid = match (&candidate_spec) {
+        let specialization_valid = match &candidate_spec {
             Some(spec) => *spec == AdapterSpecialization::Candidate,
             None => true,
         };

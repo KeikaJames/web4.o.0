@@ -109,6 +109,7 @@ impl RemoteClient {
     fn with_trust(endpoint_trust: EndpointTrust) -> Self {
         Self {
             client: reqwest::Client::builder()
+                .no_proxy()
                 .timeout(Duration::from_secs(30))
                 .build()
                 .expect("failed to build http client"),

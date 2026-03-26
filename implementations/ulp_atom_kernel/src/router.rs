@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::atom::{AtomKind, ComputeAtom, Region};
 use crate::capacity::NodeCapacity;
 use crate::kv::KVChunk;
-use crate::link::{Link, Direction, should_transfer};
+use crate::link::{Direction, Link, should_transfer};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeProfile {
@@ -87,7 +87,45 @@ fn weights_for(atom: &ComputeAtom) -> Weights {
     }
 }
 
-fn score_node(atom: &ComputeAtom, node: &NodeProfile, kv_ctx: Option<&KVContext>) -> PlacementBreakdown {
+fn kv_transport_cost(
+    node: &NodeProfile,
+    kv_ctx: Option<&KVContext>,
+) -> (f64, f64, bool) {
+    match kv_ctx {
+        Some(ctx) if !ctx.active_chunks.is_empty() => {
+            let total_kv_bytes: usize = ctx.active_chunks.iter().map(|c| c.byte_size).sum();
+            let link = if node.region.0.starts_with("dc-") {
+                Link::datacenter()
+            } else {
+                Link::p2p()
+            };
+
+            let local = ctx.active_chunks.iter().filter(|c| c.source_region == node.region).count();
+            let locality = local as f64 / ctx.active_chunks.len() as f64;
+            let should_transfer_kv = should_transfer(
+                total_kv_bytes,
+                &link,
+                Direction::Download,
+                node.compute_flops,
+                false,
+            );
+            let migration_cost = if should_transfer_kv {
+                link.transfer_cost(total_kv_bytes, Direction::Download)
+            } else {
+                crate::link::recompute_cost_kv(total_kv_bytes, node.compute_flops)
+            };
+
+            (locality, migration_cost, should_transfer_kv)
+        }
+        _ => (0.5, 0.0, false),
+    }
+}
+
+fn score_node(
+    atom: &ComputeAtom,
+    node: &NodeProfile,
+    kv_ctx: Option<&KVContext>,
+) -> (PlacementBreakdown, bool) {
     let w = weights_for(atom);
 
     let latency_score = 1.0 / (1.0 + node.latency_ms / 100.0);
@@ -101,28 +139,7 @@ fn score_node(atom: &ComputeAtom, node: &NodeProfile, kv_ctx: Option<&KVContext>
     };
 
     // KV availability cost
-    let (kv_locality_score, kv_cost) = match kv_ctx {
-        Some(ctx) if !ctx.active_chunks.is_empty() => {
-            let total_kv_bytes: usize = ctx.active_chunks.iter().map(|c| c.byte_size).sum();
-            let link = if node.region.0.starts_with("dc-") { Link::datacenter() } else { Link::p2p() };
-
-            let local = ctx.active_chunks.iter().filter(|c| c.source_region == node.region).count();
-            let locality = local as f64 / ctx.active_chunks.len() as f64;
-
-            let transfer_decision = should_transfer(
-                total_kv_bytes, &link, Direction::Download, node.compute_flops, false
-            );
-
-            let cost = if transfer_decision {
-                link.transfer_cost(total_kv_bytes, Direction::Download)
-            } else {
-                crate::link::recompute_cost_kv(total_kv_bytes, node.compute_flops)
-            };
-
-            (locality, cost)
-        }
-        _ => (0.5, 0.0),
-    };
+    let (kv_locality_score, kv_cost, should_transfer_kv) = kv_transport_cost(node, kv_ctx);
 
     let sovereignty_score = if node.sovereignty_zone == atom.region.0 { 1.0 } else { 0.3 };
 
@@ -146,11 +163,21 @@ fn score_node(atom: &ComputeAtom, node: &NodeProfile, kv_ctx: Option<&KVContext>
         + w.capacity * capacity_score
         - load_penalty * 0.1;
 
-    PlacementBreakdown {
-        node_id: node.node_id.clone(), final_score: score, latency_score, hotness_score,
-        engine_score, specialization_score, kv_locality_score, sovereignty_score,
-        migration_cost: kv_cost, capacity_score,
-    }
+    (
+        PlacementBreakdown {
+            node_id: node.node_id.clone(),
+            final_score: score,
+            latency_score,
+            hotness_score,
+            engine_score,
+            specialization_score,
+            kv_locality_score,
+            sovereignty_score,
+            migration_cost: kv_cost,
+            capacity_score,
+        },
+        should_transfer_kv,
+    )
 }
 
 pub fn route(atom: &ComputeAtom, candidates: &[NodeProfile]) -> Option<PlacementDecision> {
@@ -161,52 +188,46 @@ pub fn route_with_kv(
     atom: &ComputeAtom, candidates: &[NodeProfile], kv_ctx: Option<&KVContext>,
 ) -> Option<PlacementDecision> {
     let total_kv_bytes: usize = kv_ctx.map(|ctx| ctx.active_chunks.iter().map(|c| c.byte_size).sum()).unwrap_or(0);
+    let mut best: Option<(PlacementBreakdown, bool)> = None;
 
-    let compatible: Vec<_> = candidates.iter().filter(|n| {
-        // Hard constraint: model must match
+    for node in candidates.iter().filter(|n| {
         if let Some(ref model_id) = n.base_model_id {
             if model_id != &atom.model_id {
                 return false;
             }
         }
-        // Hard constraint: must support atom kind
         if !n.supported_kinds.contains(&atom.kind) {
             return false;
         }
-        // Hard constraint: KV capacity must be sufficient
-        if total_kv_bytes > n.kv_capacity_bytes {
-            return false;
+        total_kv_bytes <= n.kv_capacity_bytes
+    }) {
+        let (breakdown, should_transfer_kv) = score_node(atom, node, kv_ctx);
+        if !breakdown.final_score.is_finite() {
+            continue;
         }
-        true
-    }).collect();
 
-    if compatible.is_empty() {
-        return None;
+        let should_replace = match &best {
+            None => true,
+            Some((current, _)) => {
+                breakdown.final_score > current.final_score
+                    || (breakdown.final_score == current.final_score
+                        && (breakdown.migration_cost < current.migration_cost
+                            || (breakdown.migration_cost == current.migration_cost
+                                && (breakdown.latency_score > current.latency_score
+                                    || (breakdown.latency_score == current.latency_score
+                                        && breakdown.node_id < current.node_id)))))
+            }
+        };
+
+        if should_replace {
+            best = Some((breakdown, should_transfer_kv));
+        }
     }
 
-    let best = compatible.iter().map(|n| {
-        let mut breakdown = score_node(atom, n, kv_ctx);
-        let (mc, should_transfer) = match kv_ctx {
-            Some(ctx) if !ctx.active_chunks.is_empty() => {
-                let link = if n.region.0.starts_with("dc-") { Link::datacenter() } else { Link::p2p() };
-                let should = should_transfer(total_kv_bytes, &link, Direction::Download, n.compute_flops, false);
-                let cost = if should {
-                    link.transfer_cost(total_kv_bytes, Direction::Download)
-                } else {
-                    crate::link::recompute_cost_kv(total_kv_bytes, n.compute_flops)
-                };
-                (cost, should)
-            }
-            _ => (0.0, false),
-        };
-        breakdown.migration_cost = mc;
-        (breakdown, mc > 0.0, mc, should_transfer)
-    }).max_by(|a, b| a.0.final_score.partial_cmp(&b.0.final_score).unwrap())?;
-
-    Some(PlacementDecision {
-        breakdown: best.0,
-        requires_kv_migration: best.1,
-        estimated_migration_cost: best.2,
-        should_transfer_kv: best.3,
+    best.map(|(breakdown, should_transfer_kv)| PlacementDecision {
+        requires_kv_migration: breakdown.migration_cost > 0.0,
+        estimated_migration_cost: breakdown.migration_cost,
+        breakdown,
+        should_transfer_kv,
     })
 }

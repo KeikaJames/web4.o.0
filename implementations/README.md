@@ -4,7 +4,11 @@ This directory contains reference implementations of Efferva protocols.
 
 ## Status
 
-Early stage: SAC Python reference implementation exists.
+Early stage, but no longer SAC-only:
+- `sac_py/` — Python SAC reference implementation plus Chronara adapter-governance prototype
+- `sac_rs/` — Rust SAC reference implementation with schema interoperability tests
+- `ulp_atom_kernel/` — Rust OCI/Atom kernel prototype for routing, KV-aware transport, and sovereignty execution
+- `compat_py/` — Python compatibility-layer prototype for SAC-governed actions
 
 These are NOT production-ready implementations.
 They are minimal, local-first prototypes designed to validate object boundaries and protocol feasibility.
@@ -53,15 +57,13 @@ Reference implementations should NOT:
 
 ---
 
-## Future Implementations
+## Additional Implementations Present Today
 
-Planned reference implementations:
-- IIP (Intent Interface Protocol)
-- OCI (Open Compute Interface)
-- FIL (Federated Intelligence Layer)
-- Compatibility adapters
+- `sac_rs/` — Rust SAC implementation focused on parity and schema compatibility
+- `ulp_atom_kernel/` — OCI/Atom runtime prototype with routing, validation, shadow evaluation, and sovereignty boundary experiments
+- `compat_py/` — Compatibility adapter and local agent loop prototype
 
-These will be added as protocol specifications stabilize.
+These are still prototypes. Presence in the tree does not imply protocol stabilization.
 
 ---
 

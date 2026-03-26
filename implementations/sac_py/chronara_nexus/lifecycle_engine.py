@@ -539,7 +539,6 @@ class TriagePoolLifecycle:
         from datetime import timezone
         processed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         trace_id = str(uuid.uuid4())[:8]
-        trace_id = str(uuid.uuid4())[:8]
 
         assessment = triage_result.assessment if triage_result else None
 
