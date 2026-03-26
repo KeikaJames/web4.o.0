@@ -1,8 +1,13 @@
 """Governor: Validation, promotion, and rollback protocol."""
 
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from .types import AdapterRef, ValidationReport, AdapterMode, AdapterSpecialization, AdapterSelection
 from .deliberation import DeliberationOutcome
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 class ValidationTrace:
@@ -52,6 +57,8 @@ class ValidationTrace:
         self.conflict_resolution_summary: Optional[Dict[str, Any]] = None
         # Phase 16: Promotion execution summary
         self.promotion_execution_summary: Optional[Dict[str, Any]] = None
+        # Phase 20: Coordination summary
+        self.coordination_summary: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         result = {
@@ -87,6 +94,8 @@ class ValidationTrace:
             result["conflict_resolution_summary"] = self.conflict_resolution_summary
         if self.promotion_execution_summary:
             result["promotion_execution_summary"] = self.promotion_execution_summary
+        if self.coordination_summary:
+            result["coordination_summary"] = self.coordination_summary
         return result
 
 
@@ -851,22 +860,22 @@ class Governor:
                 )
             else:
                 validation_score = ValidationScoreSummary(
-                    passed=True,  # Default: assume valid if no report
-                    lineage_valid=True,
-                    specialization_valid=True,
-                    output_match=True,
-                    kv_count_match=True,
-                    generation_advanced=True,
-                    score=1.0,
+                    passed=False,
+                    lineage_valid=False,
+                    specialization_valid=False,
+                    output_match=False,
+                    kv_count_match=False,
+                    generation_advanced=False,
+                    score=0.0,
                 )
 
             # Extract comparison outcome from last trace
             comparison_outcome = ComparisonOutcomeSummary(
                 status="unknown",
                 promote_recommendation="undecided",
-                lineage_valid=True,
-                specialization_valid=True,
-                is_acceptable=True,
+                lineage_valid=False,
+                specialization_valid=False,
+                is_acceptable=False,
             )
 
             # Extract deliberation from last report
@@ -913,7 +922,7 @@ class Governor:
                 deliberation=deliberation,
                 snapshot_lineage=snapshot_lineage,
                 compatibility=compatibility,
-                export_timestamp=datetime.utcnow().isoformat() + "Z",
+                export_timestamp=_utc_now(),
                 export_version="1.0",
                 source_node=source_node,
             )
@@ -962,20 +971,20 @@ class Governor:
                 relative_to_parent=None,
             ),
             validation_score=ValidationScoreSummary(
-                passed=True,
-                lineage_valid=True,
-                specialization_valid=True,
-                output_match=True,
-                kv_count_match=True,
-                generation_advanced=True,
-                score=1.0,
+                passed=False,
+                lineage_valid=False,
+                specialization_valid=False,
+                output_match=False,
+                kv_count_match=False,
+                generation_advanced=False,
+                score=0.0,
             ),
             comparison_outcome=ComparisonOutcomeSummary(
                 status="unknown",
                 promote_recommendation="undecided",
-                lineage_valid=True,
-                specialization_valid=True,
-                is_acceptable=True,
+                lineage_valid=False,
+                specialization_valid=False,
+                is_acceptable=False,
             ),
             deliberation=DeliberationSummary(
                 outcome="candidate_ready",
@@ -1001,7 +1010,7 @@ class Governor:
                 requires_consensus_accept=False,
                 format_version="1.0",
             ),
-            export_timestamp=datetime.utcnow().isoformat() + "Z",
+            export_timestamp=_utc_now(),
             export_version="1.0",
             source_node=source_node,
         )
@@ -1090,7 +1099,7 @@ class Governor:
                 reason="Error extracting local summary for comparison",
                 fallback_used=True,
                 version="1.1",
-                timestamp=datetime.utcnow().isoformat() + "Z",
+                timestamp=_utc_now(),
             )
 
     def can_accept_remote_summary(
@@ -1105,10 +1114,11 @@ class Governor:
 
         try:
             local_summary = self.extract_federation_summary()
-            return FederationExchangeComparator.quick_check(
+            gate = FederationExchangeComparator.compare(
                 local=local_summary,
                 remote=remote_summary,
             )
+            return gate.should_accept()
         except Exception:
             return False
 
@@ -1210,14 +1220,13 @@ class Governor:
         source_node: Optional[str],
     ) -> "RemoteIntakeResult":
         """Create fallback intake result on error."""
-        from datetime import datetime
         from .types import (
             RemoteIntakeResult,
             RemoteSummaryIntake,
             StagingDecision,
         )
 
-        processed_at = datetime.utcnow().isoformat() + "Z"
+        processed_at = _utc_now()
         remote_identity = remote_summary_dict.get("identity", {}) if isinstance(remote_summary_dict, dict) else {}
 
         intake = RemoteSummaryIntake(
@@ -1330,7 +1339,7 @@ class Governor:
         )
         import uuid
 
-        processed_at = datetime.utcnow().isoformat() + "Z"
+        processed_at = _utc_now()
 
         assessment = TriageAssessment(
             adapter_id=staged_candidate.adapter_id if staged_candidate else "unknown",
@@ -1433,8 +1442,8 @@ class Governor:
                     active=self.active_adapter,
                     candidate=None,
                     status="lifecycle",
-                    passed=True,
-                    reason="Lifecycle evaluation trace",
+                    passed=False,
+                    reason="Lifecycle-only trace",
                 ))
 
             # Record in traces
@@ -1477,11 +1486,10 @@ class Governor:
         error_message: str,
     ) -> "LifecycleResult":
         """Create fallback lifecycle result on error."""
-        from datetime import datetime
         from .lifecycle_engine import LifecycleResult, LifecycleMeta, LifecycleState, LifecycleDecision
         import uuid
 
-        processed_at = datetime.utcnow().isoformat() + "Z"
+        processed_at = _utc_now()
 
         assessment = triage_result.assessment if triage_result else None
 
@@ -1652,7 +1660,7 @@ class Governor:
         )
         import uuid
 
-        processed_at = datetime.utcnow().isoformat() + "Z"
+        processed_at = _utc_now()
         trace_id = str(uuid.uuid4())[:8]
 
         # Build minimal identities
@@ -1863,7 +1871,7 @@ class Governor:
         )
         import uuid
 
-        processed_at = datetime.utcnow().isoformat() + "Z"
+        processed_at = _utc_now()
         trace_id = str(uuid.uuid4())[:8]
         execution_id = f"exec-gov-fallback-{trace_id}"
 
@@ -2081,3 +2089,211 @@ class Governor:
             return None
         except Exception:
             return None
+
+    # Phase 20: Federation Coordination
+
+    def coordinate_federation_intake(
+        self,
+        remote_summary_dict: Dict[str, Any],
+        source_node: Optional[str] = None,
+        existing_candidates: Optional[List[Dict[str, Any]]] = None,
+    ) -> "CoordinationResult":
+        """Coordinate full federation pipeline for remote summary intake.
+
+        Phase 20: Main entry point for unified federation coordination.
+        Orchestrates: intake → triage → lifecycle → conflict → execution → event → exchange
+
+        Safe to call during serve path - never blocks or raises.
+
+        Args:
+            remote_summary_dict: Remote summary as dictionary
+            source_node: Optional source node identifier
+            existing_candidates: Optional list of existing candidates for conflict check
+
+        Returns:
+            CoordinationResult with full coordination information
+        """
+        from .coordinator import FederationCoordinator
+
+        try:
+            # Extract local summary for comparison
+            local_summary = self.extract_federation_summary()
+
+            # Create coordinator
+            coordinator = FederationCoordinator()
+
+            # Execute coordination
+            result = coordinator.coordinate(
+                remote_summary_dict=remote_summary_dict,
+                local_summary=local_summary,
+                source_node=source_node,
+                existing_candidates=existing_candidates or [],
+                fallback_on_error=True,
+            )
+
+            # Record in traces
+            self._record_coordination_result(result)
+
+            return result
+
+        except Exception as e:
+            return self._fallback_coordination_result(remote_summary_dict, source_node, str(e))
+
+    def _record_coordination_result(self, result: "CoordinationResult") -> bool:
+        """Record coordination result in validation traces.
+
+        Phase 20: Audit trail for coordination decisions.
+        """
+        try:
+            if self._validation_traces and len(self._validation_traces) > 0:
+                last_trace = self._validation_traces[-1]
+                if not hasattr(last_trace, 'coordination_summary'):
+                    last_trace.coordination_summary = {}
+                last_trace.coordination_summary = {
+                    "coordination_id": result.coordination_id,
+                    "adapter_id": result.adapter_id,
+                    "generation": result.generation,
+                    "decision": result.decision.value,
+                    "is_ready": result.is_ready,
+                    "final_stage": result.get_final_stage(),
+                    "fallback_used": result.fallback_used or result.any_stage_fallback,
+                }
+            return True
+        except Exception:
+            return False
+
+    def _fallback_coordination_result(
+        self,
+        remote_summary_dict: Dict[str, Any],
+        source_node: Optional[str],
+        error_message: str,
+    ) -> "CoordinationResult":
+        """Create fallback coordination result on error."""
+        from .coordinator import CoordinationResult, CoordinationDecision, CoordinationTrace, StageStatus
+        import uuid
+
+        now = _utc_now()
+        coordination_id = f"coord-gov-fallback-{str(uuid.uuid4())[:8]}"
+        trace_id = str(uuid.uuid4())[:8]
+
+        identity = remote_summary_dict.get("identity", {}) if isinstance(remote_summary_dict, dict) else {}
+        adapter_id = identity.get("adapter_id", "unknown")
+        generation = identity.get("generation", 0)
+
+        return CoordinationResult(
+            coordination_id=coordination_id,
+            adapter_id=adapter_id,
+            generation=generation,
+            source_node=source_node,
+            decision=CoordinationDecision.COORDINATED_REJECT,
+            is_ready=False,
+            intake_status=StageStatus.FAILED,
+            triage_status=StageStatus.PENDING,
+            lifecycle_status=StageStatus.PENDING,
+            conflict_status=StageStatus.PENDING,
+            execution_status=StageStatus.PENDING,
+            event_status=StageStatus.PENDING,
+            exchange_status=StageStatus.PENDING,
+            reason=f"Governor coordination error: {error_message}",
+            recommendation="reject_due_to_error",
+            trace=CoordinationTrace(
+                trace_id=trace_id,
+                stages=[],
+                started_at=now,
+                completed_at=now,
+                short_circuit_at="governor",
+                short_circuit_reason=error_message,
+            ),
+            fallback_used=True,
+            any_stage_fallback=True,
+            version="1.0",
+            coordinated_at=now,
+        )
+
+    def consume_coordination_result(
+        self,
+        result: "CoordinationResult",
+    ) -> bool:
+        """Consume coordination result and update Governor state if appropriate.
+
+        Phase 20: Integration point for coordination results.
+        Only updates state if coordination was successful and ready.
+
+        Args:
+            result: CoordinationResult to consume
+
+        Returns:
+            True if result was consumed successfully
+        """
+        from .coordinator import CoordinationDecision
+
+        try:
+            if not result.is_successful():
+                return False
+
+            # Ensure we have a trace to record to
+            if not self._validation_traces:
+                # Create minimal trace for coordination recording
+                self._validation_traces.append(ValidationTrace(
+                    active=self.active_adapter,
+                    candidate=None,
+                    status="coordination",
+                    passed=True,
+                    reason="Coordination result consumption",
+                ))
+
+            # Record in traces
+            self._record_coordination_result(result)
+
+            # Only update state if coordinated_ready
+            if result.decision == CoordinationDecision.COORDINATED_READY:
+                # Could trigger promotion here if desired
+                # For now, just record the successful coordination
+                pass
+
+            return True
+        except Exception:
+            return False
+
+    def get_coordination_history(self) -> List[Dict[str, Any]]:
+        """Get all coordination results from trace history.
+
+        Phase 20: Retrieve coordination audit trail.
+        """
+        history = []
+        for trace in self._validation_traces:
+            if hasattr(trace, 'coordination_summary') and trace.coordination_summary:
+                history.append(trace.coordination_summary)
+        return history
+
+    def quick_coordination_check(
+        self,
+        remote_summary_dict: Dict[str, Any],
+    ) -> bool:
+        """Quick check if remote summary can be coordinated.
+
+        Phase 20: Fast path for simple coordination decisions.
+        """
+        from .coordinator import FederationCoordinator
+
+        try:
+            return FederationCoordinator().quick_coordination_check(remote_summary_dict)
+        except Exception:
+            return False
+
+    def is_candidate_coordinated_ready(
+        self,
+        adapter_id: str,
+        generation: int,
+    ) -> bool:
+        """Check if a candidate has been coordinated as ready.
+
+        Phase 20: Verify coordination result for specific candidate.
+        """
+        for trace in self._validation_traces:
+            if hasattr(trace, 'coordination_summary') and trace.coordination_summary:
+                summary = trace.coordination_summary
+                if (summary.get('adapter_id') == adapter_id and
+                    summary.get('generation') == generation):
+                    return summary.get('decision') == 'coordinated_ready' and summary.get('is_ready', False)
+        return False

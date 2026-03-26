@@ -28,6 +28,14 @@ from .deliberation import (
     Verifier,
     Synthesizer,
 )
+from .coordinator import (
+    FederationCoordinator,
+    CoordinationResult,
+    CoordinationDecision,
+    CoordinationTrace,
+    StageResult,
+    StageStatus,
+)
 
 __all__ = [
     "AdapterRef",
@@ -54,4 +62,11 @@ __all__ = [
     "Critic",
     "Verifier",
     "Synthesizer",
+    # Phase 20: Federation Coordinator
+    "FederationCoordinator",
+    "CoordinationResult",
+    "CoordinationDecision",
+    "CoordinationTrace",
+    "StageResult",
+    "StageStatus",
 ]
