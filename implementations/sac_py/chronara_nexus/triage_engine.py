@@ -8,7 +8,7 @@ Safe to call during serve path - never blocks or raises.
 
 import uuid
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .types import (
     StagedRemoteCandidate,
@@ -20,6 +20,10 @@ from .types import (
     FederationExchangeGate,
     ExchangeStatus,
 )
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 class RemoteTriageEngine:
@@ -78,7 +82,7 @@ class RemoteTriageEngine:
         local_summary: Optional[FederationSummary],
     ) -> TriageResult:
         """Internal triage logic."""
-        processed_at = datetime.utcnow().isoformat() + "Z"
+        processed_at = _utc_now()
         trace_id = str(uuid.uuid4())[:8]
 
         # Extract information from staged candidate
@@ -409,7 +413,7 @@ class RemoteTriageEngine:
         error_message: str,
     ) -> TriageResult:
         """Create safe fallback triage result on error."""
-        processed_at = datetime.utcnow().isoformat() + "Z"
+        processed_at = _utc_now()
         trace_id = str(uuid.uuid4())[:8]
 
         assessment = TriageAssessment(

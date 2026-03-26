@@ -5,7 +5,7 @@ to determine exchange readiness.
 """
 
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .types import (
     FederationSummary,
@@ -35,6 +35,10 @@ class FederationExchangeComparator:
     MIN_VALIDATION_SCORE = 0.5
     MAX_GENERATION_GAP_FOR_ACCEPT = 2
     MAX_GENERATION_GAP_FOR_DOWNGRADE = 5
+
+    @staticmethod
+    def _utc_now() -> str:
+        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     @classmethod
     def compare(
@@ -100,7 +104,7 @@ class FederationExchangeComparator:
             reason=reason,
             fallback_used=False,
             version="1.0",
-            timestamp=datetime.utcnow().isoformat() + "Z",
+            timestamp=cls._utc_now(),
         )
 
     @classmethod
@@ -209,7 +213,7 @@ class FederationExchangeComparator:
             (local_spec == "candidate" and remote_spec == "candidate")
         )
 
-        compatible = can_compose
+        compatible = False
 
         return SpecializationCompatibility(
             compatible=compatible,
@@ -300,17 +304,14 @@ class FederationExchangeComparator:
         )
 
     @classmethod
-    def _determine_status(
+    def _decision_from_components(
         cls,
         lineage: LineageCompatibility,
         specialization: SpecializationCompatibility,
         validation: ValidationCompatibility,
         comparison: ComparisonCompatibility,
     ) -> tuple[ExchangeStatus, str, str]:
-        """Determine overall exchange status.
-
-        Returns: (status, recommendation, reason)
-        """
+        """Shared status decision for full compare and quick accept checks."""
         # Reject if lineage is incompatible
         if not lineage.compatible:
             return (
@@ -351,12 +352,11 @@ class FederationExchangeComparator:
                     "downgrade_large_generation_gap",
                     f"Large generation gap: {lineage.generation_gap}",
                 )
-            else:
-                return (
-                    ExchangeStatus.REJECT,
-                    "reject_generation_gap_too_large",
-                    f"Generation gap too large: {lineage.generation_gap}",
-                )
+            return (
+                ExchangeStatus.REJECT,
+                "reject_generation_gap_too_large",
+                f"Generation gap too large: {lineage.generation_gap}",
+            )
 
         # Downgrade if validation score decreased
         if validation.score_delta < -0.2:
@@ -371,6 +371,25 @@ class FederationExchangeComparator:
             ExchangeStatus.ACCEPT,
             "accept_compatible",
             "All compatibility checks passed",
+        )
+
+    @classmethod
+    def _determine_status(
+        cls,
+        lineage: LineageCompatibility,
+        specialization: SpecializationCompatibility,
+        validation: ValidationCompatibility,
+        comparison: ComparisonCompatibility,
+    ) -> tuple[ExchangeStatus, str, str]:
+        """Determine overall exchange status.
+
+        Returns: (status, recommendation, reason)
+        """
+        return cls._decision_from_components(
+            lineage=lineage,
+            specialization=specialization,
+            validation=validation,
+            comparison=comparison,
         )
 
     @classmethod
@@ -420,7 +439,7 @@ class FederationExchangeComparator:
             reason="Error during comparison, using safe fallback",
             fallback_used=True,
             version="1.0",
-            timestamp=datetime.utcnow().isoformat() + "Z",
+            timestamp=cls._utc_now(),
         )
 
     @classmethod
@@ -434,20 +453,16 @@ class FederationExchangeComparator:
         Phase 11: Fast path for simple accept/reject decisions.
         """
         try:
-            # Check adapter ID
-            if local.identity.adapter_id != remote.identity.adapter_id:
-                return False
-
-            # Check generation compatibility
-            if remote.identity.generation < local.compatibility.min_compatible_generation:
-                return False
-            if remote.identity.generation > local.compatibility.max_compatible_generation:
-                return False
-
-            # Check validation score
-            if remote.validation_score.score < local.compatibility.min_validation_score:
-                return False
-
-            return True
+            lineage = cls._assess_lineage(local, remote)
+            specialization = cls._assess_specialization(local, remote)
+            validation = cls._assess_validation(local, remote)
+            comparison = cls._assess_comparison(local, remote)
+            status, _, _ = cls._decision_from_components(
+                lineage=lineage,
+                specialization=specialization,
+                validation=validation,
+                comparison=comparison,
+            )
+            return status == ExchangeStatus.ACCEPT
         except Exception:
             return False

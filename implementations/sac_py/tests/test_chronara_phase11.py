@@ -298,8 +298,9 @@ class TestFederationExchangeComparator:
 
         gate = FederationExchangeComparator.compare(local, remote)
 
-        # Should not reject due to specialization
-        assert gate.status in (ExchangeStatus.ACCEPT, ExchangeStatus.DOWNGRADE)
+        assert gate.status == ExchangeStatus.DOWNGRADE
+        assert gate.specialization.compatible is False
+        assert gate.specialization.can_compose is True
 
     def test_deterministic_same_input_same_output(self):
         """Phase 11: Same inputs must produce same outputs."""
@@ -342,6 +343,35 @@ class TestGovernorIntegration:
         # Incompatible remote (different adapter)
         incompatible_remote = create_test_summary("other", 1)
         assert governor.can_accept_remote_summary(incompatible_remote) is False
+
+    def test_governor_quick_accept_rejects_failed_remote_validation(self):
+        """Phase 11: Quick accept must align with full gate on failed remotes."""
+        adapter = AdapterRef("test", 1, AdapterMode.SERVE)
+        governor = Governor(adapter)
+
+        remote = create_test_summary(
+            "test",
+            2,
+            validation_passed=False,
+            validation_score=0.9,
+            comparison_acceptable=False,
+        )
+
+        assert governor.can_accept_remote_summary(remote) is False
+        assert governor.check_exchange_compatibility(remote).status == ExchangeStatus.REJECT
+
+    def test_quick_check_matches_compare_for_accept_downgrade_reject(self):
+        """Phase 11: quick_check must stay semantically aligned with compare."""
+        local = create_test_summary("test", 1)
+        cases = [
+            create_test_summary("test", 2),
+            create_test_summary("test", 2, specialization="shared"),
+            create_test_summary("other", 1),
+        ]
+
+        for remote in cases:
+            gate = FederationExchangeComparator.compare(local, remote)
+            assert FederationExchangeComparator.quick_check(local, remote) is gate.should_accept()
 
     def test_governor_incorporate_exchange_gate(self):
         """Phase 11: Governor must record exchange gate in traces."""

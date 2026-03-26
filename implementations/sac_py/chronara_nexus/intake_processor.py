@@ -7,7 +7,7 @@ Safe to call during serve path - never blocks or raises.
 import hashlib
 import json
 from typing import Dict, Any, Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .types import (
     FederationSummary,
@@ -28,6 +28,10 @@ from .types import (
     SnapshotLineageSummary,
 )
 from .exchange_gate import FederationExchangeComparator
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 class RemoteIntakeProcessor:
@@ -92,7 +96,7 @@ class RemoteIntakeProcessor:
         source_node: Optional[str],
     ) -> RemoteIntakeResult:
         """Internal processing logic."""
-        processed_at = datetime.utcnow().isoformat() + "Z"
+        processed_at = _utc_now()
 
         # Step 1: Validate structure
         structure_valid, validation_errors = cls._validate_structure(remote_summary_dict)
@@ -283,7 +287,7 @@ class RemoteIntakeProcessor:
         source_node: Optional[str],
     ) -> StagedRemoteCandidate:
         """Create staged candidate from accepted/downgraded summary."""
-        staged_at = datetime.utcnow().isoformat() + "Z"
+        staged_at = _utc_now()
 
         # Apply downgrades if needed
         summary = remote_summary
@@ -351,7 +355,7 @@ class RemoteIntakeProcessor:
             reason="Failed to parse remote summary structure",
             fallback_used=True,
             version=cls.VERSION,
-            timestamp=datetime.utcnow().isoformat() + "Z",
+            timestamp=_utc_now(),
         )
 
     @classmethod
@@ -408,7 +412,7 @@ class RemoteIntakeProcessor:
         error_message: str,
     ) -> RemoteIntakeResult:
         """Create safe fallback result on processing error."""
-        processed_at = datetime.utcnow().isoformat() + "Z"
+        processed_at = _utc_now()
 
         # Try to extract identity even from broken input
         remote_identity = remote_summary_dict.get("identity", {}) if isinstance(remote_summary_dict, dict) else {}

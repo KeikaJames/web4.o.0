@@ -402,7 +402,9 @@ class TestFailureSafety:
         # Should still return a valid summary
         assert summary is not None
         assert summary.identity.adapter_id == "test"
-        assert summary.validation_score.passed is True  # Safe default
+        assert summary.validation_score.passed is False
+        assert summary.validation_score.score == 0.0
+        assert summary.comparison_outcome.is_acceptable is False
 
     def test_minimal_safe_summary_factory(self):
         """Phase 10: _minimal_safe_summary must return valid summary."""
@@ -411,7 +413,9 @@ class TestFailureSafety:
         assert summary.identity.adapter_id == "fallback"
         assert summary.identity.generation == 0
         assert summary.source_node == "error-node"
-        assert summary.validation_score.passed is True  # Safe default
+        assert summary.validation_score.passed is False
+        assert summary.validation_score.score == 0.0
+        assert summary.comparison_outcome.is_acceptable is False
 
     def test_collector_extraction_failure_safety(self):
         """Phase 10: Collector extraction must fail safely."""

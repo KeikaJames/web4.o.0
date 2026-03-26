@@ -596,6 +596,19 @@ class TestGovernorLifecycleIntegration:
         assert last_trace.lifecycle_result_summary is not None
         assert last_trace.lifecycle_result_summary['adapter_id'] == "test"
 
+    def test_governor_lifecycle_only_trace_does_not_mark_validation_passed(self):
+        """Lifecycle-only traces must not look like successful validation traces."""
+        governor = create_test_governor()
+        triage_result = create_test_triage_result(TriageStatus.READY)
+
+        governor.evaluate_lifecycle(triage_result)
+
+        last_trace = governor.get_last_validation_trace()
+        assert last_trace is not None
+        assert last_trace.status == "lifecycle"
+        assert last_trace.passed is False
+        assert last_trace.reason == "Lifecycle-only trace"
+
     def test_governor_get_active_candidates(self):
         """Governor can retrieve active lifecycle candidates."""
         try:

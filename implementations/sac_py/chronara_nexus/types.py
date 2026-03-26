@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, Dict, Any, List
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class AdapterMode(Enum):
@@ -550,8 +550,6 @@ class FederationSummary:
 
         Phase 10: Static factory for emergency summary creation.
         """
-        from datetime import datetime
-
         identity = AdapterIdentitySummary(
             adapter_id=adapter_id,
             generation=generation,
@@ -582,20 +580,20 @@ class FederationSummary:
                 relative_to_parent=None,
             ),
             validation_score=ValidationScoreSummary(
-                passed=True,
-                lineage_valid=True,
-                specialization_valid=True,
-                output_match=True,
-                kv_count_match=True,
-                generation_advanced=True,
-                score=1.0,
+                passed=False,
+                lineage_valid=False,
+                specialization_valid=False,
+                output_match=False,
+                kv_count_match=False,
+                generation_advanced=False,
+                score=0.0,
             ),
             comparison_outcome=ComparisonOutcomeSummary(
                 status="unknown",
                 promote_recommendation="undecided",
-                lineage_valid=True,
-                specialization_valid=True,
-                is_acceptable=True,
+                lineage_valid=False,
+                specialization_valid=False,
+                is_acceptable=False,
             ),
             deliberation=DeliberationSummary(
                 outcome="candidate_ready",
@@ -621,7 +619,7 @@ class FederationSummary:
                 requires_consensus_accept=False,
                 format_version="1.0",
             ),
-            export_timestamp=datetime.utcnow().isoformat() + "Z",
+            export_timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             export_version="1.0",
             source_node=source_node,
         )
