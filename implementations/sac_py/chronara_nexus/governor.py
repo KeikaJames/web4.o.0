@@ -1,8 +1,9 @@
 """Governor: Validation, promotion, and rollback protocol."""
 
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Callable
 from .types import AdapterRef, ValidationReport, AdapterMode, AdapterSpecialization, AdapterSelection
+from .boundary import build_compatibility_hint, build_readiness_hint
 from .deliberation import DeliberationOutcome
 from .common import utc_now
 
@@ -129,6 +130,44 @@ class Governor:
         self.enable_deliberation = enable_deliberation
         self._deliberation = None
         self._validation_traces: List[ValidationTrace] = []
+
+    def _ensure_validation_trace(self, status: str, passed: bool, reason: str) -> ValidationTrace:
+        """Ensure there is a validation trace available for late-phase recording."""
+        if not self._validation_traces:
+            self._validation_traces.append(
+                ValidationTrace(
+                    active=self.active_adapter,
+                    candidate=None,
+                    status=status,
+                    passed=passed,
+                    reason=reason,
+                )
+            )
+        return self._validation_traces[-1]
+
+    def _record_trace_summary(self, attr_name: str, summary: Dict[str, Any]) -> bool:
+        """Store a late-phase summary on the latest validation trace."""
+        try:
+            if not self._validation_traces:
+                return True
+            trace = self._validation_traces[-1]
+            setattr(trace, attr_name, summary)
+            return True
+        except Exception:
+            return False
+
+    def _get_trace_summaries(
+        self,
+        attr_name: str,
+        predicate: Optional[Callable[[Dict[str, Any]], bool]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Collect non-empty summaries from validation traces."""
+        summaries: List[Dict[str, Any]] = []
+        for trace in self._validation_traces:
+            summary = getattr(trace, attr_name, None)
+            if summary and (predicate is None or predicate(summary)):
+                summaries.append(summary)
+        return summaries
 
     def get_adapter_selection(self) -> AdapterSelection:
         """Get current specialization-aware adapter selection."""
@@ -1137,21 +1176,10 @@ class Governor:
             True if incorporation succeeded
         """
         try:
-            # Add exchange info to last validation trace if exists
-            if self._validation_traces and len(self._validation_traces) > 0:
-                last_trace = self._validation_traces[-1]
-                if not hasattr(last_trace, 'exchange_gate_summary'):
-                    last_trace.exchange_gate_summary = {}
-                last_trace.exchange_gate_summary = {
-                    "remote_adapter_id": gate.remote_adapter_id,
-                    "remote_generation": gate.remote_generation,
-                    "status": gate.status.value,
-                    "recommendation": gate.recommendation,
-                    "lineage_compatible": gate.lineage.compatible,
-                    "specialization_compatible": gate.specialization.compatible,
-                    "validation_acceptable": gate.validation.acceptable,
-                }
-            return True
+            return self._record_trace_summary(
+                "exchange_gate_summary",
+                build_compatibility_hint(gate),
+            )
         except Exception:
             return False
 
@@ -1209,12 +1237,7 @@ class Governor:
 
     def _record_remote_execution_bridge(self, bridge_summary: Dict[str, Any]) -> bool:
         """Record remote execution bridge summary in validation traces."""
-        try:
-            if self._validation_traces:
-                self._validation_traces[-1].remote_execution_bridge_summary = bridge_summary
-            return True
-        except Exception:
-            return False
+        return self._record_trace_summary("remote_execution_bridge_summary", bridge_summary)
 
     def _bridge_reject_intake_result(
         self,
@@ -1257,11 +1280,10 @@ class Governor:
         Phase 12: Audit trail for staged remote summaries.
         """
         try:
-            if self._validation_traces and len(self._validation_traces) > 0:
-                last_trace = self._validation_traces[-1]
-                if not hasattr(last_trace, 'staged_remote_summary'):
-                    last_trace.staged_remote_summary = {}
-                last_trace.staged_remote_summary = {
+            last_trace = self._validation_traces[-1] if self._validation_traces else None
+            return self._record_trace_summary(
+                "staged_remote_summary",
+                {
                     "adapter_id": result.intake.remote_adapter_id,
                     "generation": result.intake.remote_generation,
                     "decision": result.decision.value,
@@ -1269,11 +1291,11 @@ class Governor:
                     "is_downgraded": result.staged_candidate.is_downgraded if result.staged_candidate else False,
                     "bridge_decision": (
                         last_trace.remote_execution_bridge_summary.get("bridge_decision")
-                        if getattr(last_trace, "remote_execution_bridge_summary", None)
+                        if last_trace and last_trace.remote_execution_bridge_summary
                         else None
                     ),
-                }
-            return True
+                },
+            )
         except Exception:
             return False
 
@@ -1322,11 +1344,7 @@ class Governor:
 
         Phase 12: Retrieve staged remote summary audit trail.
         """
-        staged = []
-        for trace in self._validation_traces:
-            if hasattr(trace, 'staged_remote_summary') and trace.staged_remote_summary:
-                staged.append(trace.staged_remote_summary)
-        return staged
+        return self._get_trace_summaries("staged_remote_summary")
 
     def triage_staged_candidate(
         self,
@@ -1371,19 +1389,10 @@ class Governor:
         Phase 13: Audit trail for triage decisions.
         """
         try:
-            if self._validation_traces and len(self._validation_traces) > 0:
-                last_trace = self._validation_traces[-1]
-                if not hasattr(last_trace, 'triage_result_summary'):
-                    last_trace.triage_result_summary = {}
-                last_trace.triage_result_summary = {
-                    "adapter_id": result.assessment.adapter_id,
-                    "generation": result.assessment.generation,
-                    "status": result.assessment.triage_status.value,
-                    "readiness_score": result.assessment.readiness.readiness_score,
-                    "target_pool": result.target_pool,
-                    "priority": result.priority,
-                }
-            return True
+            return self._record_trace_summary(
+                "triage_result_summary",
+                build_readiness_hint(result),
+            )
         except Exception:
             return False
 
@@ -1450,12 +1459,10 @@ class Governor:
 
         Phase 13: Retrieve candidates marked as ready for federation.
         """
-        ready = []
-        for trace in self._validation_traces:
-            if hasattr(trace, 'triage_result_summary') and trace.triage_result_summary:
-                if trace.triage_result_summary.get('status') == 'ready':
-                    ready.append(trace.triage_result_summary)
-        return ready
+        return self._get_trace_summaries(
+            "triage_result_summary",
+            predicate=lambda summary: summary.get("status") == "ready",
+        )
 
     def quick_readiness_check(
         self,
@@ -1498,16 +1505,11 @@ class Governor:
                 fallback_on_error=True,
             )
 
-            # Ensure we have a trace to record to
-            if not self._validation_traces:
-                # Create minimal trace for lifecycle recording
-                self._validation_traces.append(ValidationTrace(
-                    active=self.active_adapter,
-                    candidate=None,
-                    status="lifecycle",
-                    passed=False,
-                    reason="Lifecycle-only trace",
-                ))
+            self._ensure_validation_trace(
+                status="lifecycle",
+                passed=False,
+                reason="Lifecycle-only trace",
+            )
 
             # Record in traces
             self._record_lifecycle_result(result)
@@ -1523,11 +1525,9 @@ class Governor:
         Phase 14: Audit trail for lifecycle decisions.
         """
         try:
-            if self._validation_traces and len(self._validation_traces) > 0:
-                last_trace = self._validation_traces[-1]
-                if not hasattr(last_trace, 'lifecycle_result_summary'):
-                    last_trace.lifecycle_result_summary = {}
-                last_trace.lifecycle_result_summary = {
+            return self._record_trace_summary(
+                "lifecycle_result_summary",
+                {
                     "adapter_id": result.meta.adapter_id,
                     "generation": result.meta.generation,
                     "state": result.meta.state.value,
@@ -1537,8 +1537,8 @@ class Governor:
                     "priority": result.meta.priority_score,
                     "state_changed": result.state_changed,
                     "needs_cleanup": result.needs_cleanup,
-                }
-            return True
+                },
+            )
         except Exception:
             return False
 
@@ -1593,24 +1593,20 @@ class Governor:
 
         Phase 14: Retrieve candidates still in active pool.
         """
-        active = []
-        for trace in self._validation_traces:
-            if hasattr(trace, 'lifecycle_result_summary') and trace.lifecycle_result_summary:
-                if trace.lifecycle_result_summary.get('state') in ('ready', 'hold', 'downgraded'):
-                    active.append(trace.lifecycle_result_summary)
-        return active
+        return self._get_trace_summaries(
+            "lifecycle_result_summary",
+            predicate=lambda summary: summary.get("state") in ("ready", "hold", "downgraded"),
+        )
 
     def get_expired_candidates(self) -> List[Dict[str, Any]]:
         """Get all expired lifecycle candidates from trace history.
 
         Phase 14: Retrieve candidates pending cleanup.
         """
-        expired = []
-        for trace in self._validation_traces:
-            if hasattr(trace, 'lifecycle_result_summary') and trace.lifecycle_result_summary:
-                if trace.lifecycle_result_summary.get('state') in ('expired', 'evicted'):
-                    expired.append(trace.lifecycle_result_summary)
-        return expired
+        return self._get_trace_summaries(
+            "lifecycle_result_summary",
+            predicate=lambda summary: summary.get("state") in ("expired", "evicted"),
+        )
 
     def quick_expiration_check(
         self,
@@ -1684,11 +1680,9 @@ class Governor:
         Phase 15: Audit trail for conflict resolution decisions.
         """
         try:
-            if self._validation_traces and len(self._validation_traces) > 0:
-                last_trace = self._validation_traces[-1]
-                if not hasattr(last_trace, 'conflict_resolution_summary'):
-                    last_trace.conflict_resolution_summary = {}
-                last_trace.conflict_resolution_summary = {
+            return self._record_trace_summary(
+                "conflict_resolution_summary",
+                {
                     "set_id": result.conflict_set.set_id,
                     "candidate_count": result.conflict_set.candidate_count,
                     "has_conflicts": result.conflict_set.has_conflicts,
@@ -1697,8 +1691,8 @@ class Governor:
                     "resolution_decision": result.conflict_set.resolution_decision.value,
                     "selected_candidate": result.conflict_set.get_selected_candidate_key(),
                     "can_proceed": result.conflict_set.can_proceed(),
-                }
-            return True
+                },
+            )
         except Exception:
             return False
 
@@ -1825,11 +1819,7 @@ class Governor:
 
         Phase 15: Retrieve conflict resolution audit trail.
         """
-        history = []
-        for trace in self._validation_traces:
-            if hasattr(trace, 'conflict_resolution_summary') and trace.conflict_resolution_summary:
-                history.append(trace.conflict_resolution_summary)
-        return history
+        return self._get_trace_summaries("conflict_resolution_summary")
 
     def can_promote_after_resolution(
         self,
@@ -1900,19 +1890,17 @@ class Governor:
         Phase 16: Audit trail for promotion execution decisions.
         """
         try:
-            if self._validation_traces and len(self._validation_traces) > 0:
-                last_trace = self._validation_traces[-1]
-                if not hasattr(last_trace, 'promotion_execution_summary'):
-                    last_trace.promotion_execution_summary = {}
-                last_trace.promotion_execution_summary = {
+            return self._record_trace_summary(
+                "promotion_execution_summary",
+                {
                     "execution_id": result.execution.execution_id,
                     "candidate_key": result.execution.candidate.to_key(),
                     "decision": result.execution.decision.value,
                     "status": result.execution.status.value,
                     "success": result.success,
                     "preconditions_met": result.execution.preconditions.all_preconditions_met,
-                }
-            return True
+                },
+            )
         except Exception:
             return False
 
@@ -2034,11 +2022,7 @@ class Governor:
 
         Phase 16: Retrieve promotion execution audit trail.
         """
-        history = []
-        for trace in self._validation_traces:
-            if hasattr(trace, 'promotion_execution_summary') and trace.promotion_execution_summary:
-                history.append(trace.promotion_execution_summary)
-        return history
+        return self._get_trace_summaries("promotion_execution_summary")
 
     def can_execute_promotion(
         self,
@@ -2207,11 +2191,9 @@ class Governor:
         Phase 20: Audit trail for coordination decisions.
         """
         try:
-            if self._validation_traces and len(self._validation_traces) > 0:
-                last_trace = self._validation_traces[-1]
-                if not hasattr(last_trace, 'coordination_summary'):
-                    last_trace.coordination_summary = {}
-                last_trace.coordination_summary = {
+            recorded = self._record_trace_summary(
+                "coordination_summary",
+                {
                     "coordination_id": result.coordination_id,
                     "adapter_id": result.adapter_id,
                     "generation": result.generation,
@@ -2220,10 +2202,14 @@ class Governor:
                     "final_stage": result.get_final_stage(),
                     "fallback_used": result.fallback_used or result.any_stage_fallback,
                     "bridge_summary": result.bridge_summary,
-                }
-                if result.bridge_summary:
-                    last_trace.remote_execution_bridge_summary = result.bridge_summary
-            return True
+                },
+            )
+            if result.bridge_summary:
+                self._record_trace_summary(
+                    "remote_execution_bridge_summary",
+                    result.bridge_summary,
+                )
+            return recorded
         except Exception:
             return False
 
@@ -2296,16 +2282,11 @@ class Governor:
             if not result.is_successful():
                 return False
 
-            # Ensure we have a trace to record to
-            if not self._validation_traces:
-                # Create minimal trace for coordination recording
-                self._validation_traces.append(ValidationTrace(
-                    active=self.active_adapter,
-                    candidate=None,
-                    status="coordination",
-                    passed=True,
-                    reason="Coordination result consumption",
-                ))
+            self._ensure_validation_trace(
+                status="coordination",
+                passed=True,
+                reason="Coordination result consumption",
+            )
 
             # Record in traces
             self._record_coordination_result(result)
@@ -2325,11 +2306,7 @@ class Governor:
 
         Phase 20: Retrieve coordination audit trail.
         """
-        history = []
-        for trace in self._validation_traces:
-            if hasattr(trace, 'coordination_summary') and trace.coordination_summary:
-                history.append(trace.coordination_summary)
-        return history
+        return self._get_trace_summaries("coordination_summary")
 
     def quick_coordination_check(
         self,

@@ -43,6 +43,14 @@ from .common import (
     FallbackBuilder,
     safe_get,
 )
+from .boundary import (
+    BoundarySurface,
+    BoundaryDescriptor,
+    get_boundary_descriptor,
+    list_boundary_object_kinds,
+    build_compatibility_hint,
+    build_readiness_hint,
+)
 
 __all__ = [
     "AdapterRef",
@@ -82,4 +90,10 @@ __all__ = [
     "DecisionThresholds",
     "FallbackBuilder",
     "safe_get",
+    "BoundarySurface",
+    "BoundaryDescriptor",
+    "get_boundary_descriptor",
+    "list_boundary_object_kinds",
+    "build_compatibility_hint",
+    "build_readiness_hint",
 ]
