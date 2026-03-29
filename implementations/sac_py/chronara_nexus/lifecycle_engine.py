@@ -19,6 +19,14 @@ from .types import (
     TriageResult,
     TriageStatus,
 )
+from .common import (
+    build_meta_section,
+    build_processing_result,
+    parse_enum,
+    extract_meta_section,
+    extract_processing_result,
+    utc_now,
+)
 
 
 class LifecycleDecision(Enum):
@@ -122,11 +130,11 @@ class LifecycleMeta:
                 "action": self.decision.value,
                 "reason": self.decision_reason,
             },
-            "meta": {
-                "fallback_used": self.fallback_used,
-                "version": self.version,
-                "reviewed_at": self.reviewed_at,
-            },
+            "meta": build_meta_section(
+                fallback_used=self.fallback_used,
+                version=self.version,
+                reviewed_at=self.reviewed_at,
+            ),
         }
 
     @classmethod
@@ -140,10 +148,11 @@ class LifecycleMeta:
         meta = data.get("meta", {})
 
         state_str = state_info.get("current", "staged")
-        state = LifecycleState(state_str) if state_str in [s.value for s in LifecycleState] else LifecycleState.STAGED
+        state = parse_enum(LifecycleState, state_str, LifecycleState.STAGED)
 
         decision_str = decision.get("action", "keep")
-        dec = LifecycleDecision(decision_str) if decision_str in [d.value for d in LifecycleDecision] else LifecycleDecision.KEEP
+        dec = parse_enum(LifecycleDecision, decision_str, LifecycleDecision.KEEP)
+        meta = extract_meta_section(data, extra_keys=["reviewed_at"])
 
         return cls(
             adapter_id=identity.get("adapter_id", ""),
@@ -160,8 +169,8 @@ class LifecycleMeta:
             priority_changed=scores.get("priority_changed", False),
             decision=dec,
             decision_reason=decision.get("reason", ""),
-            fallback_used=meta.get("fallback_used", False),
-            version=meta.get("version", "1.0"),
+            fallback_used=meta["fallback_used"],
+            version=meta["version"],
             reviewed_at=meta.get("reviewed_at", ""),
         )
 
@@ -205,21 +214,21 @@ class LifecycleResult:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to JSON-friendly dictionary."""
-        return {
-            "processed_at": self.processed_at,
-            "processor_version": self.processor_version,
-            "fallback_used": self.fallback_used,
-            "lifecycle": self.meta.to_dict(),
-            "transition": {
+        return build_processing_result(
+            processed_at=self.processed_at,
+            processor_version=self.processor_version,
+            fallback_used=self.fallback_used,
+            lifecycle=self.meta.to_dict(),
+            transition={
                 "previous_state": self.previous_state.value if self.previous_state else None,
                 "state_changed": self.state_changed,
             },
-            "action_hints": {
+            action_hints={
                 "needs_cleanup": self.needs_cleanup,
                 "needs_requeue": self.needs_requeue,
             },
-            "trace_id": self.trace_id,
-        }
+            trace_id=self.trace_id,
+        )
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "LifecycleResult":
@@ -228,18 +237,19 @@ class LifecycleResult:
         action_hints = data.get("action_hints", {})
 
         prev_state_str = transition.get("previous_state")
-        prev_state = LifecycleState(prev_state_str) if prev_state_str else None
+        prev_state = parse_enum(LifecycleState, prev_state_str, LifecycleState.STAGED) if prev_state_str else None
+        meta = extract_processing_result(data)
 
         return cls(
-            processed_at=data.get("processed_at", ""),
-            processor_version=data.get("processor_version", "1.0"),
-            fallback_used=data.get("fallback_used", False),
+            processed_at=meta["processed_at"],
+            processor_version=meta["processor_version"],
+            fallback_used=meta["fallback_used"],
             meta=LifecycleMeta.from_dict(data.get("lifecycle", {})),
             previous_state=prev_state,
             state_changed=transition.get("state_changed", False),
             needs_cleanup=action_hints.get("needs_cleanup", False),
             needs_requeue=action_hints.get("needs_requeue", False),
-            trace_id=data.get("trace_id", ""),
+            trace_id=meta["trace_id"],
         )
 
 
@@ -534,7 +544,7 @@ class TriagePoolLifecycle:
         error_message: str,
     ) -> LifecycleResult:
         """Create fallback lifecycle result on error."""
-        processed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        processed_at = utc_now()
         trace_id = str(uuid.uuid4())[:8]
 
         assessment = triage_result.assessment if triage_result else None

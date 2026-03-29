@@ -14,7 +14,7 @@ import uuid
 from typing import Optional, Dict, Any, List
 from enum import Enum
 from dataclasses import dataclass
-from .common import utc_now
+from .common import build_reasoning, extract_meta_section, extract_reasoning, parse_enum, utc_now
 
 
 class CoordinationDecision(Enum):
@@ -67,8 +67,7 @@ class StageResult:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "StageResult":
-        status_str = data.get("status", "pending")
-        status = StageStatus(status_str) if status_str in [s.value for s in StageStatus] else StageStatus.PENDING
+        status = parse_enum(StageStatus, data.get("status", "pending"), StageStatus.PENDING)
         return cls(
             stage_name=data.get("stage", ""),
             status=status,
@@ -205,10 +204,10 @@ class CoordinationResult:
                 "event": self.event_summary,
                 "exchange": self.exchange_summary,
             },
-            "reasoning": {
-                "reason": self.reason,
-                "recommendation": self.recommendation,
-            },
+            "reasoning": build_reasoning(
+                reason=self.reason,
+                recommendation=self.recommendation,
+            ),
             "trace": self.trace.to_dict() if self.trace else None,
             "fallback": {
                 "coordination_fallback_used": self.fallback_used,
@@ -230,14 +229,21 @@ class CoordinationResult:
         fallback = data.get("fallback", {})
         meta = data.get("meta", {})
 
-        def parse_status(s: str) -> StageStatus:
-            return StageStatus(s) if s in [st.value for st in StageStatus] else StageStatus.PENDING
-
         decision_str = decision.get("decision", "coordinated_reject")
-        dec = CoordinationDecision(decision_str) if decision_str in [d.value for d in CoordinationDecision] else CoordinationDecision.COORDINATED_REJECT
+        dec = parse_enum(
+            CoordinationDecision,
+            decision_str,
+            CoordinationDecision.COORDINATED_REJECT,
+        )
 
         trace_data = data.get("trace")
         trace = CoordinationTrace.from_dict(trace_data) if trace_data else None
+        reasoning_fields = extract_reasoning(data)
+        fallback = data.get("fallback", {})
+        meta = extract_meta_section(
+            data,
+            extra_keys=["coordinated_at"],
+        )
 
         return cls(
             coordination_id=identity.get("coordination_id", ""),
@@ -246,13 +252,13 @@ class CoordinationResult:
             source_node=identity.get("source_node"),
             decision=dec,
             is_ready=decision.get("is_ready", False),
-            intake_status=parse_status(stage_status.get("intake", "pending")),
-            triage_status=parse_status(stage_status.get("triage", "pending")),
-            lifecycle_status=parse_status(stage_status.get("lifecycle", "pending")),
-            conflict_status=parse_status(stage_status.get("conflict", "pending")),
-            execution_status=parse_status(stage_status.get("execution", "pending")),
-            event_status=parse_status(stage_status.get("event", "pending")),
-            exchange_status=parse_status(stage_status.get("exchange", "pending")),
+            intake_status=parse_enum(StageStatus, stage_status.get("intake", "pending"), StageStatus.PENDING),
+            triage_status=parse_enum(StageStatus, stage_status.get("triage", "pending"), StageStatus.PENDING),
+            lifecycle_status=parse_enum(StageStatus, stage_status.get("lifecycle", "pending"), StageStatus.PENDING),
+            conflict_status=parse_enum(StageStatus, stage_status.get("conflict", "pending"), StageStatus.PENDING),
+            execution_status=parse_enum(StageStatus, stage_status.get("execution", "pending"), StageStatus.PENDING),
+            event_status=parse_enum(StageStatus, stage_status.get("event", "pending"), StageStatus.PENDING),
+            exchange_status=parse_enum(StageStatus, stage_status.get("exchange", "pending"), StageStatus.PENDING),
             intake_summary=summaries.get("intake"),
             triage_summary=summaries.get("triage"),
             lifecycle_summary=summaries.get("lifecycle"),
@@ -260,13 +266,13 @@ class CoordinationResult:
             execution_summary=summaries.get("execution"),
             event_summary=summaries.get("event"),
             exchange_summary=summaries.get("exchange"),
-            reason=reasoning.get("reason", ""),
-            recommendation=reasoning.get("recommendation", ""),
+            reason=reasoning_fields["reason"],
+            recommendation=reasoning_fields["recommendation"],
             trace=trace,
             bridge_summary=data.get("bridge_summary"),
             fallback_used=fallback.get("coordination_fallback_used", False),
             any_stage_fallback=fallback.get("any_stage_fallback", False),
-            version=meta.get("version", "1.0"),
+            version=meta["version"],
             coordinated_at=meta.get("coordinated_at", ""),
         )
 

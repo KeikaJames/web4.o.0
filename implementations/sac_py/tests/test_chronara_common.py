@@ -11,9 +11,17 @@ from implementations.sac_py.chronara_nexus.common import (
     CommonMetadata,
     DecisionThresholds,
     FallbackBuilder,
+    build_meta_section,
+    build_processing_result,
+    build_reasoning,
+    extract_meta_section,
+    extract_processing_result,
+    extract_reasoning,
+    parse_enum,
     safe_get,
     flatten_nested,
 )
+from implementations.sac_py.chronara_nexus.types import AdapterMode
 
 
 class TestUtcNow:
@@ -199,6 +207,47 @@ class TestFallbackBuilder:
             recommendation="custom_reject",
         )
         assert reasoning[CommonMetadata.RECOMMENDATION] == "custom_reject"
+
+
+class TestSharedSectionBuilders:
+    """Test shared reasoning/meta/result helpers."""
+
+    def test_parse_enum_returns_default_for_invalid_value(self):
+        assert parse_enum(AdapterMode, "bad", AdapterMode.SERVE) == AdapterMode.SERVE
+
+    def test_build_reasoning_and_extract_reasoning_round_trip(self):
+        reasoning = build_reasoning("good", "proceed", hint="keep")
+        extracted = extract_reasoning({"reasoning": reasoning})
+        assert reasoning["reason"] == "good"
+        assert reasoning["recommendation"] == "proceed"
+        assert extracted["reason"] == "good"
+        assert extracted["recommendation"] == "proceed"
+
+    def test_build_meta_and_extract_meta_round_trip(self):
+        meta = build_meta_section(
+            fallback_used=True,
+            version="2.0",
+            reviewed_at="2024-01-01T00:00:00Z",
+        )
+        extracted = extract_meta_section({"meta": meta}, extra_keys=["reviewed_at"])
+        assert extracted["fallback_used"] is True
+        assert extracted["version"] == "2.0"
+        assert extracted["reviewed_at"] == "2024-01-01T00:00:00Z"
+
+    def test_build_processing_result_and_extract_round_trip(self):
+        result = build_processing_result(
+            processed_at="2024-01-01T00:00:00Z",
+            processor_version="2.0",
+            fallback_used=True,
+            trace_id="trace-1",
+            payload={"ok": True},
+        )
+        extracted = extract_processing_result(result)
+        assert extracted["processed_at"] == "2024-01-01T00:00:00Z"
+        assert extracted["processor_version"] == "2.0"
+        assert extracted["fallback_used"] is True
+        assert extracted["trace_id"] == "trace-1"
+        assert result["payload"] == {"ok": True}
 
 
 class TestSafeGet:

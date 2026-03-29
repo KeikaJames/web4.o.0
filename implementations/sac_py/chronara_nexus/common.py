@@ -8,7 +8,11 @@ Provides unified helpers for:
 """
 
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional
+from enum import Enum
+from typing import Dict, Any, Optional, Type, TypeVar
+
+
+EnumT = TypeVar("EnumT", bound=Enum)
 
 
 # =============================================================================
@@ -177,6 +181,122 @@ class FallbackBuilder:
             CommonMetadata.REASON: reason,
             CommonMetadata.RECOMMENDATION: recommendation,
         }
+
+
+# =============================================================================
+# Shared Section Builders / Parsers
+# =============================================================================
+
+def parse_enum(enum_cls: Type[EnumT], value: Any, default: EnumT) -> EnumT:
+    """Parse enum value safely with explicit default."""
+    try:
+        return enum_cls(value)
+    except (ValueError, TypeError):
+        return default
+
+
+def build_reasoning(
+    reason: str = "",
+    recommendation: str = "",
+    **extra: Any,
+) -> Dict[str, Any]:
+    """Build a standardized reasoning section."""
+    return {
+        CommonMetadata.REASON: reason,
+        CommonMetadata.RECOMMENDATION: recommendation,
+        **extra,
+    }
+
+
+def extract_reasoning(
+    data: Dict[str, Any],
+    nested_key: Optional[str] = "reasoning",
+    default_reason: str = "",
+    default_recommendation: str = "",
+) -> Dict[str, Any]:
+    """Extract standardized reason/recommendation fields."""
+    source = data.get(nested_key, {}) if nested_key else data
+    if not isinstance(source, dict):
+        source = {}
+    return {
+        CommonMetadata.REASON: source.get(CommonMetadata.REASON, default_reason),
+        CommonMetadata.RECOMMENDATION: source.get(
+            CommonMetadata.RECOMMENDATION,
+            default_recommendation,
+        ),
+    }
+
+
+def build_meta_section(
+    *,
+    fallback_used: bool = False,
+    version: str = CommonMetadata.DEFAULT_VERSION,
+    **extra: Any,
+) -> Dict[str, Any]:
+    """Build a standardized nested meta section."""
+    return {
+        CommonMetadata.FALLBACK_USED: fallback_used,
+        CommonMetadata.VERSION: version,
+        **extra,
+    }
+
+
+def extract_meta_section(
+    data: Dict[str, Any],
+    *,
+    nested_key: Optional[str] = "meta",
+    default_version: str = CommonMetadata.DEFAULT_VERSION,
+    extra_keys: Optional[list[str]] = None,
+) -> Dict[str, Any]:
+    """Extract a standardized nested meta section with optional extra fields."""
+    source = data.get(nested_key, {}) if nested_key else data
+    if not isinstance(source, dict):
+        source = {}
+
+    meta = {
+        CommonMetadata.FALLBACK_USED: source.get(CommonMetadata.FALLBACK_USED, False),
+        CommonMetadata.VERSION: source.get(CommonMetadata.VERSION, default_version),
+    }
+    for key in extra_keys or []:
+        meta[key] = source.get(key)
+    return meta
+
+
+def build_processing_result(
+    *,
+    processed_at: str,
+    processor_version: str,
+    fallback_used: bool,
+    trace_id: Optional[str] = None,
+    **sections: Any,
+) -> Dict[str, Any]:
+    """Build the common top-level envelope used by Chronara Result objects."""
+    result = {
+        CommonMetadata.PROCESSED_AT: processed_at,
+        CommonMetadata.PROCESSOR_VERSION: processor_version,
+        CommonMetadata.FALLBACK_USED: fallback_used,
+    }
+    result.update(sections)
+    if trace_id is not None:
+        result[CommonMetadata.TRACE_ID] = trace_id
+    return result
+
+
+def extract_processing_result(
+    data: Dict[str, Any],
+    *,
+    default_version: str = CommonMetadata.DEFAULT_PROCESSOR_VERSION,
+) -> Dict[str, Any]:
+    """Extract the common top-level Result envelope fields."""
+    return {
+        CommonMetadata.PROCESSED_AT: data.get(CommonMetadata.PROCESSED_AT, ""),
+        CommonMetadata.PROCESSOR_VERSION: data.get(
+            CommonMetadata.PROCESSOR_VERSION,
+            default_version,
+        ),
+        CommonMetadata.FALLBACK_USED: data.get(CommonMetadata.FALLBACK_USED, False),
+        CommonMetadata.TRACE_ID: data.get(CommonMetadata.TRACE_ID, ""),
+    }
 
 
 # =============================================================================

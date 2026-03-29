@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
+from .common import build_processing_result, extract_processing_result, parse_enum
 
 
 class AdapterMode(Enum):
@@ -816,7 +817,7 @@ class FederationExchangeGate:
         )
 
         status_str = data.get("status", "reject")
-        status = ExchangeStatus(status_str) if status_str in ["accept", "downgrade", "reject"] else ExchangeStatus.REJECT
+        status = parse_enum(ExchangeStatus, status_str, ExchangeStatus.REJECT)
 
         return cls(
             local_adapter_id=local_data.get("adapter_id", ""),
@@ -993,7 +994,7 @@ class StagedRemoteCandidate:
         staging = data.get("staging", {})
 
         decision_str = staging.get("decision", "stage_reject")
-        decision = StagingDecision(decision_str) if decision_str in ["stage_accept", "stage_downgrade", "stage_reject"] else StagingDecision.STAGE_REJECT
+        decision = parse_enum(StagingDecision, decision_str, StagingDecision.STAGE_REJECT)
 
         return cls(
             adapter_id=identity.get("adapter_id", ""),
@@ -1038,31 +1039,32 @@ class RemoteIntakeResult:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to JSON-friendly dictionary."""
-        return {
-            "processed_at": self.processed_at,
-            "processor_version": self.processor_version,
-            "fallback_used": self.fallback_used,
-            "intake": self.intake.to_dict(),
-            "decision": self.decision.value,
-            "decision_reason": self.decision_reason,
-            "recommendation": self.recommendation,
-            "staged_candidate": self.staged_candidate.to_dict() if self.staged_candidate else None,
-            "rejection_trace": self.rejection_trace,
-        }
+        return build_processing_result(
+            processed_at=self.processed_at,
+            processor_version=self.processor_version,
+            fallback_used=self.fallback_used,
+            intake=self.intake.to_dict(),
+            decision=self.decision.value,
+            decision_reason=self.decision_reason,
+            recommendation=self.recommendation,
+            staged_candidate=self.staged_candidate.to_dict() if self.staged_candidate else None,
+            rejection_trace=self.rejection_trace,
+        )
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "RemoteIntakeResult":
         """Create from dictionary."""
         decision_str = data.get("decision", "stage_reject")
-        decision = StagingDecision(decision_str) if decision_str in ["stage_accept", "stage_downgrade", "stage_reject"] else StagingDecision.STAGE_REJECT
+        decision = parse_enum(StagingDecision, decision_str, StagingDecision.STAGE_REJECT)
 
         staged_data = data.get("staged_candidate")
         staged = StagedRemoteCandidate.from_dict(staged_data) if staged_data else None
+        meta = extract_processing_result(data)
 
         return cls(
-            processed_at=data.get("processed_at", ""),
-            processor_version=data.get("processor_version", "1.0"),
-            fallback_used=data.get("fallback_used", False),
+            processed_at=meta["processed_at"],
+            processor_version=meta["processor_version"],
+            fallback_used=meta["fallback_used"],
             intake=RemoteSummaryIntake(**data.get("intake", {})),
             decision=decision,
             decision_reason=data.get("decision_reason", ""),
@@ -1211,7 +1213,7 @@ class TriageAssessment:
         action = data.get("action_hints", {})
 
         status_str = triage.get("status", "reject")
-        status = TriageStatus(status_str) if status_str in ["ready", "hold", "downgrade", "reject"] else TriageStatus.REJECT
+        status = parse_enum(TriageStatus, status_str, TriageStatus.REJECT)
 
         return cls(
             adapter_id=identity.get("adapter_id", ""),
@@ -1288,30 +1290,31 @@ class TriageResult:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to JSON-friendly dictionary."""
-        return {
-            "processed_at": self.processed_at,
-            "processor_version": self.processor_version,
-            "fallback_used": self.fallback_used,
-            "assessment": self.assessment.to_dict(),
-            "routing": {
+        return build_processing_result(
+            processed_at=self.processed_at,
+            processor_version=self.processor_version,
+            fallback_used=self.fallback_used,
+            assessment=self.assessment.to_dict(),
+            routing={
                 "target_pool": self.target_pool,
                 "priority": self.priority,
             },
-            "trace_id": self.trace_id,
-        }
+            trace_id=self.trace_id,
+        )
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "TriageResult":
         """Create from dictionary."""
         routing = data.get("routing", {})
+        meta = extract_processing_result(data)
         return cls(
-            processed_at=data.get("processed_at", ""),
-            processor_version=data.get("processor_version", "1.0"),
-            fallback_used=data.get("fallback_used", False),
+            processed_at=meta["processed_at"],
+            processor_version=meta["processor_version"],
+            fallback_used=meta["fallback_used"],
             assessment=TriageAssessment.from_dict(data.get("assessment", {})),
             target_pool=routing.get("target_pool", "rejected"),
             priority=routing.get("priority", 0),
-            trace_id=data.get("trace_id", ""),
+            trace_id=meta["trace_id"],
         )
 
 

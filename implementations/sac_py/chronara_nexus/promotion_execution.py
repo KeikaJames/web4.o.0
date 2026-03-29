@@ -12,6 +12,17 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 from enum import Enum
 from dataclasses import dataclass
+from .common import (
+    DecisionThresholds,
+    build_meta_section,
+    build_processing_result,
+    build_reasoning,
+    extract_meta_section,
+    extract_processing_result,
+    extract_reasoning,
+    parse_enum,
+    utc_now,
+)
 
 
 class ExecutionDecision(Enum):
@@ -228,15 +239,15 @@ class PromotionExecution:
                 "completed_at": self.completed_at,
             },
             "trace": [t.to_dict() for t in self.execution_trace],
-            "reasoning": {
-                "reason": self.reason,
-                "recommendation": self.recommendation,
-            },
-            "meta": {
-                "fallback_used": self.fallback_used,
-                "version": self.version,
-                "created_at": self.created_at,
-            },
+            "reasoning": build_reasoning(
+                reason=self.reason,
+                recommendation=self.recommendation,
+            ),
+            "meta": build_meta_section(
+                fallback_used=self.fallback_used,
+                version=self.version,
+                created_at=self.created_at,
+            ),
         }
 
     @classmethod
@@ -247,13 +258,15 @@ class PromotionExecution:
         meta = data.get("meta", {})
 
         decision_str = execution.get("decision", "reject")
-        decision = ExecutionDecision(decision_str) if decision_str in [d.value for d in ExecutionDecision] else ExecutionDecision.REJECT
+        decision = parse_enum(ExecutionDecision, decision_str, ExecutionDecision.REJECT)
 
         status_str = execution.get("status", "rejected")
-        status = ExecutionStatus(status_str) if status_str in [s.value for s in ExecutionStatus] else ExecutionStatus.REJECTED
+        status = parse_enum(ExecutionStatus, status_str, ExecutionStatus.REJECTED)
 
         trace_data = data.get("trace", [])
         execution_trace = [ExecutionTrace.from_dict(t) for t in trace_data]
+        reasoning = extract_reasoning(data)
+        meta = extract_meta_section(data, extra_keys=["created_at"])
 
         return cls(
             execution_id=identity.get("execution_id", ""),
@@ -264,10 +277,10 @@ class PromotionExecution:
             executed_at=execution.get("executed_at"),
             completed_at=execution.get("completed_at"),
             execution_trace=execution_trace,
-            reason=reasoning.get("reason", ""),
-            recommendation=reasoning.get("recommendation", ""),
-            fallback_used=meta.get("fallback_used", False),
-            version=meta.get("version", "1.0"),
+            reason=reasoning["reason"],
+            recommendation=reasoning["recommendation"],
+            fallback_used=meta["fallback_used"],
+            version=meta["version"],
             created_at=meta.get("created_at", ""),
         )
 
@@ -311,31 +324,32 @@ class PromotionExecutionResult:
     trace_id: str
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "processed_at": self.processed_at,
-            "processor_version": self.processor_version,
-            "fallback_used": self.fallback_used,
-            "execution": self.execution.to_dict(),
-            "outcome": {
+        return build_processing_result(
+            processed_at=self.processed_at,
+            processor_version=self.processor_version,
+            fallback_used=self.fallback_used,
+            execution=self.execution.to_dict(),
+            outcome={
                 "success": self.success,
                 "status": self.outcome_status,
                 "details": self.outcome_details,
             },
-            "trace_id": self.trace_id,
-        }
+            trace_id=self.trace_id,
+        )
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "PromotionExecutionResult":
         outcome = data.get("outcome", {})
+        meta = extract_processing_result(data)
         return cls(
-            processed_at=data.get("processed_at", ""),
-            processor_version=data.get("processor_version", "1.0"),
-            fallback_used=data.get("fallback_used", False),
+            processed_at=meta["processed_at"],
+            processor_version=meta["processor_version"],
+            fallback_used=meta["fallback_used"],
             execution=PromotionExecution.from_dict(data.get("execution", {})),
             success=outcome.get("success", False),
             outcome_status=outcome.get("status", ""),
             outcome_details=outcome.get("details", {}),
-            trace_id=data.get("trace_id", ""),
+            trace_id=meta["trace_id"],
         )
 
 
@@ -351,9 +365,9 @@ class FederationPromotionExecutor:
     VERSION = "1.0"
 
     # Precondition thresholds
-    MIN_READINESS_SCORE = 0.7
-    MIN_TTL_REMAINING = 1.0  # hours
-    MIN_VALIDATION_SCORE = 0.6
+    MIN_READINESS_SCORE = DecisionThresholds.MIN_READINESS_SCORE
+    MIN_TTL_REMAINING = DecisionThresholds.MIN_TTL_REMAINING_HOURS  # hours
+    MIN_VALIDATION_SCORE = DecisionThresholds.MIN_VALIDATION_SCORE
 
     @classmethod
     def execute(
@@ -399,8 +413,7 @@ class FederationPromotionExecutor:
         conflict_summary: Optional[Dict[str, Any]],
     ) -> PromotionExecutionResult:
         """Internal promotion execution logic."""
-        now = datetime.now(timezone.utc)
-        processed_at = now.isoformat().replace("+00:00", "Z")
+        processed_at = utc_now()
         trace_id = str(uuid.uuid4())[:8]
         execution_id = f"exec-{trace_id}"
 
@@ -607,8 +620,7 @@ class FederationPromotionExecutor:
         error_message: str,
     ) -> PromotionExecutionResult:
         """Create fallback execution result on error."""
-        now = datetime.now(timezone.utc)
-        processed_at = now.isoformat().replace("+00:00", "Z")
+        processed_at = utc_now()
         trace_id = str(uuid.uuid4())[:8]
         execution_id = f"exec-fallback-{trace_id}"
 
@@ -693,8 +705,7 @@ class FederationPromotionExecutor:
                 trace_id=execution_result.trace_id,
             )
 
-        now = datetime.now(timezone.utc)
-        processed_at = now.isoformat().replace("+00:00", "Z")
+        processed_at = utc_now()
 
         # Deep copy to avoid mutating the caller's object
         import copy
@@ -739,7 +750,7 @@ class FederationPromotionExecutor:
                 if state != "ready":
                     return False
                 ttl = lifecycle_summary.get("ttl_remaining", 0)
-                if ttl < cls.MIN_TTL_REMAINING:
+                if ttl < DecisionThresholds.MIN_TTL_REMAINING_HOURS:
                     return False
 
             # Check candidate validity

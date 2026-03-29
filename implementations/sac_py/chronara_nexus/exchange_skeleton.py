@@ -11,6 +11,7 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 from enum import Enum
 from dataclasses import dataclass
+from .common import DecisionThresholds, utc_now
 
 
 class ExchangeDecision(Enum):
@@ -317,8 +318,8 @@ class ParameterMemoryExchangeSkeleton:
     VERSION = "1.0"
 
     # Thresholds
-    MIN_READINESS_SCORE = 0.7
-    MIN_ELIGIBLE_GATES = 6  # At least 6 of 7 gates must pass
+    MIN_READINESS_SCORE = DecisionThresholds.MIN_READINESS_SCORE
+    MIN_ELIGIBLE_GATES = DecisionThresholds.MIN_PASSED_GATES_FOR_READY
 
     @classmethod
     def create_proposal(
@@ -347,7 +348,7 @@ class ParameterMemoryExchangeSkeleton:
         priority: int,
     ) -> ExchangeProposal:
         """Internal proposal creation."""
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        now = utc_now()
         proposal_id = f"proposal-{str(uuid.uuid4())[:8]}"
 
         candidate = ExchangeCandidate.from_dict(candidate_dict)
@@ -396,7 +397,7 @@ class ParameterMemoryExchangeSkeleton:
         error_message: str,
     ) -> ExchangeProposal:
         """Create fallback proposal on error."""
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        now = utc_now()
         proposal_id = f"proposal-fallback-{str(uuid.uuid4())[:8]}"
 
         candidate = ExchangeCandidate.from_dict(candidate_dict)
@@ -465,7 +466,7 @@ class ParameterMemoryExchangeSkeleton:
         execution_summary: Optional[Dict[str, Any]],
     ) -> ExchangeReadiness:
         """Internal readiness assessment."""
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        now = utc_now()
         readiness_id = f"readiness-{str(uuid.uuid4())[:8]}"
 
         # Calculate eligibility from summaries
@@ -479,12 +480,15 @@ class ParameterMemoryExchangeSkeleton:
         # Determine decision
         passed_gates = sum(1 for v in gates.values() if v >= 0.7)
 
-        if passed_gates >= cls.MIN_ELIGIBLE_GATES and readiness_score >= cls.MIN_READINESS_SCORE:
+        if (
+            passed_gates >= cls.MIN_ELIGIBLE_GATES
+            and readiness_score >= cls.MIN_READINESS_SCORE
+        ):
             decision = ExchangeDecision.EXCHANGE_READY
             is_ready = True
             reason = "All gates passed - exchange ready"
             recommendation = "proceed_with_exchange"
-        elif passed_gates >= 4:
+        elif passed_gates >= DecisionThresholds.MIN_PASSED_GATES_FOR_HOLD:
             decision = ExchangeDecision.EXCHANGE_HOLD
             is_ready = False
             reason = "Some gates pending - hold for observation"
@@ -570,7 +574,7 @@ class ParameterMemoryExchangeSkeleton:
         error_message: str,
     ) -> ExchangeReadiness:
         """Create fallback readiness on error."""
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        now = utc_now()
         readiness_id = f"readiness-fallback-{str(uuid.uuid4())[:8]}"
 
         return ExchangeReadiness(
@@ -587,4 +591,3 @@ class ParameterMemoryExchangeSkeleton:
             version=cls.VERSION,
             fallback_used=True,
         )
-

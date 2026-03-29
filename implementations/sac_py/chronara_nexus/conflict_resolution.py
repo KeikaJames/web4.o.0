@@ -12,6 +12,15 @@ from typing import Optional, Dict, Any, List, Set, Tuple
 from datetime import datetime
 from enum import Enum
 from dataclasses import dataclass
+from .common import (
+    build_meta_section,
+    build_processing_result,
+    build_reasoning,
+    extract_meta_section,
+    extract_processing_result,
+    parse_enum,
+    utc_now,
+)
 
 
 class ConflictType(Enum):
@@ -319,14 +328,16 @@ class ConflictSet:
                 "decision": self.resolution_decision.value,
                 "selected_candidate": self.selected_candidate.to_dict() if self.selected_candidate else None,
                 "candidate_resolutions": [cr.to_dict() for cr in self.candidate_resolutions],
-                "reason": self.resolution_reason,
-                "recommendation": self.recommendation,
+                **build_reasoning(
+                    reason=self.resolution_reason,
+                    recommendation=self.recommendation,
+                ),
             },
-            "meta": {
-                "fallback_used": self.fallback_used,
-                "version": self.version,
-                "resolved_at": self.resolved_at,
-            },
+            "meta": build_meta_section(
+                fallback_used=self.fallback_used,
+                version=self.version,
+                resolved_at=self.resolved_at,
+            ),
         }
 
     @classmethod
@@ -338,10 +349,11 @@ class ConflictSet:
         meta = data.get("meta", {})
 
         decision_str = resolution.get("decision", "reject_all")
-        decision = ResolutionDecision(decision_str) if decision_str in [d.value for d in ResolutionDecision] else ResolutionDecision.REJECT_ALL
+        decision = parse_enum(ResolutionDecision, decision_str, ResolutionDecision.REJECT_ALL)
 
         selected_data = resolution.get("selected_candidate")
         selected = CandidateIdentity.from_dict(selected_data) if selected_data else None
+        meta = extract_meta_section(data, extra_keys=["resolved_at"])
 
         return cls(
             set_id=identity.get("set_id", ""),
@@ -359,8 +371,8 @@ class ConflictSet:
             candidate_resolutions=[CandidateResolution.from_dict(cr) for cr in resolution.get("candidate_resolutions", [])],
             resolution_reason=resolution.get("reason", ""),
             recommendation=resolution.get("recommendation", ""),
-            fallback_used=meta.get("fallback_used", False),
-            version=meta.get("version", "1.0"),
+            fallback_used=meta["fallback_used"],
+            version=meta["version"],
             resolved_at=meta.get("resolved_at", ""),
         )
 
@@ -392,22 +404,23 @@ class ConflictResolutionResult:
     trace_id: str
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "processed_at": self.processed_at,
-            "processor_version": self.processor_version,
-            "fallback_used": self.fallback_used,
-            "conflict_set": self.conflict_set.to_dict(),
-            "trace_id": self.trace_id,
-        }
+        return build_processing_result(
+            processed_at=self.processed_at,
+            processor_version=self.processor_version,
+            fallback_used=self.fallback_used,
+            conflict_set=self.conflict_set.to_dict(),
+            trace_id=self.trace_id,
+        )
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ConflictResolutionResult":
+        meta = extract_processing_result(data)
         return cls(
-            processed_at=data.get("processed_at", ""),
-            processor_version=data.get("processor_version", "1.0"),
-            fallback_used=data.get("fallback_used", False),
+            processed_at=meta["processed_at"],
+            processor_version=meta["processor_version"],
+            fallback_used=meta["fallback_used"],
             conflict_set=ConflictSet.from_dict(data.get("conflict_set", {})),
-            trace_id=data.get("trace_id", ""),
+            trace_id=meta["trace_id"],
         )
 
 
@@ -457,9 +470,7 @@ class RemoteCandidateConflictResolver:
         candidates: List[Dict[str, Any]],
     ) -> ConflictResolutionResult:
         """Internal conflict resolution logic."""
-        from datetime import timezone
-        now = datetime.now(timezone.utc)
-        processed_at = now.isoformat().replace("+00:00", "Z")
+        processed_at = utc_now()
         trace_id = str(uuid.uuid4())[:8]
 
         # Build candidate identities
@@ -910,9 +921,7 @@ class RemoteCandidateConflictResolver:
         error_message: str,
     ) -> ConflictResolutionResult:
         """Create fallback resolution result on error."""
-        from datetime import timezone
-        now = datetime.now(timezone.utc)
-        processed_at = now.isoformat().replace("+00:00", "Z")
+        processed_at = utc_now()
         trace_id = str(uuid.uuid4())[:8]
 
         # Build minimal identities
