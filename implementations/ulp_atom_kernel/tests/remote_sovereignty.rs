@@ -9,6 +9,7 @@ use ulp_atom_kernel::client::RemoteClient;
 use ulp_atom_kernel::kv::{KVChunk, MigrationReceipt};
 use ulp_atom_kernel::runtime::{DiscoveryPool, Nonce, SlotClaim, SlotClaimResponse, SlotOffer};
 use ulp_atom_kernel::server::app_with_backend;
+use ulp_atom_kernel::adapter::{AdapterContext, AdapterMode, AdapterRef, AdapterSpecialization};
 use ulp_atom_kernel::sovereignty::{
     BlindedAtomRequest, BlindedAtomResponse, ExecutionStage, HomeNode, RemoteExecutionError,
 };
@@ -285,6 +286,93 @@ async fn two_stage_remote_runtime_pipeline_flows_prefill_into_decode() {
     assert_eq!(result.decode_node_id, "decode-node");
     assert!(result.kv_migrated);
     assert_eq!(result.output, b"prefill then decode");
+
+    prefill_handle.abort();
+    decode_handle.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_execution_preserves_adapter_lineage() {
+    let (endpoint, handle) =
+        spawn_router(app_with_backend("eph-lineage", Box::new(EchoBackend))).await;
+
+    let mut pool = DiscoveryPool::new();
+    pool.register(offer("eph-lineage", &endpoint, vec![AtomKind::Prefill]));
+
+    let adapter_ctx = AdapterContext {
+        active_adapter: AdapterRef {
+            adapter_id: "adapter-test-42".to_string(),
+            generation: 7,
+            mode: AdapterMode::Serve,
+            specialization: AdapterSpecialization::Candidate,
+        },
+        candidate_adapter: None,
+        shared_adapter: None,
+        stable_adapter: None,
+    };
+
+    let mut home = HomeNode::new("home-lineage", "zone-1", Region("us-west".into()));
+    let result = home
+        .execute_remote_with_runtime_ctx(
+            &RemoteClient::new_trusted(),
+            &prefill_atom("lineage-atom"),
+            b"lineage test".to_vec(),
+            &pool,
+            1000,
+            200,
+            Some(&adapter_ctx),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.ephemeral_node_id, "eph-lineage");
+    assert_eq!(result.output, b"lineage test");
+
+    handle.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_stage_remote_preserves_adapter_lineage() {
+    let (prefill_endpoint, prefill_handle) =
+        spawn_router(app_with_backend("prefill-lin", Box::new(EchoBackend))).await;
+    let (decode_endpoint, decode_handle) =
+        spawn_router(app_with_backend("decode-lin", Box::new(EchoBackend))).await;
+
+    let mut pool = DiscoveryPool::new();
+    pool.register(offer("prefill-lin", &prefill_endpoint, vec![AtomKind::Prefill]));
+    pool.register(offer("decode-lin", &decode_endpoint, vec![AtomKind::Decode]));
+
+    let adapter_ctx = AdapterContext {
+        active_adapter: AdapterRef {
+            adapter_id: "adapter-2stage".to_string(),
+            generation: 3,
+            mode: AdapterMode::Serve,
+            specialization: AdapterSpecialization::Stable,
+        },
+        candidate_adapter: None,
+        shared_adapter: None,
+        stable_adapter: None,
+    };
+
+    let mut home = HomeNode::new("home-2stage-lin", "zone", Region("us-west".into()));
+    let result = home
+        .execute_two_stage_remote_with_runtime_ctx(
+            &RemoteClient::new_trusted(),
+            &prefill_atom("prefill-lin"),
+            &decode_atom("decode-lin"),
+            b"two stage lineage".to_vec(),
+            &pool,
+            4000,
+            5000,
+            200,
+            Some(&adapter_ctx),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.prefill_node_id, "prefill-lin");
+    assert_eq!(result.decode_node_id, "decode-lin");
+    assert_eq!(result.output, b"two stage lineage");
 
     prefill_handle.abort();
     decode_handle.abort();

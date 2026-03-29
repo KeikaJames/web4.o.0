@@ -84,7 +84,7 @@ impl HomeNode {
             target_node_id,
             placement: decision,
             atom_region: atom.region.clone(),
-            prib_mask: vec![],
+            prib_mask: vec![], // Non-PRIB path: empty mask signals no blinding applied
         };
 
         Ok((request, blinded))
@@ -217,6 +217,11 @@ impl HomeNode {
             })
             .unwrap_or((None, None, None));
 
+        // Derive nonce from atom_id for deterministic but non-trivial verification
+        let prefill_nonce = Nonce::new(
+            prefill_atom.id.bytes().fold(1u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64))
+        );
+
         let prefill_receipt = PrefillReceipt {
             atom_id: prefill_atom.id.clone(),
             prefill_node_id: prefill_request.target_node_id.clone(),
@@ -225,7 +230,7 @@ impl HomeNode {
                 stage_id: format!("{}:prefill", prefill_atom.id),
                 stage_kind: "prefill".to_string(),
                 owner_node_id: self.node_id.clone(),
-                nonce: Nonce::new(0),
+                nonce: prefill_nonce.clone(),
                 output_size: prefill_real_output.len(),
                 kv_summary: (
                     prefill_eph_result.kv_produced.len(),
@@ -258,7 +263,7 @@ impl HomeNode {
         prefill_receipt.kv_handoff.verify("prefill")?;
 
         // Verify stage receipt
-        prefill_receipt.stage_receipt.verify("prefill", &Nonce::new(0))?;
+        prefill_receipt.stage_receipt.verify("prefill", &prefill_nonce)?;
 
         // Verify provenance chain: handoff ownership matches stage receipt owner
         if let Some(ref owner) = prefill_receipt.kv_handoff.metadata.ownership_hint {
@@ -419,6 +424,19 @@ impl HomeNode {
         nonce_seed: u64,
         timeout_ms: u64,
     ) -> Result<HomeExecutionResponse, String> {
+        self.execute_remote_with_runtime_ctx(client, atom, input, pool, nonce_seed, timeout_ms, None).await
+    }
+
+    pub async fn execute_remote_with_runtime_ctx(
+        &mut self,
+        client: &RemoteClient,
+        atom: &ComputeAtom,
+        input: Vec<u8>,
+        pool: &DiscoveryPool,
+        nonce_seed: u64,
+        timeout_ms: u64,
+        adapter_context: Option<&crate::adapter::AdapterContext>,
+    ) -> Result<HomeExecutionResponse, String> {
         let stage = self
             .execute_remote_stage(
                 client,
@@ -429,14 +447,17 @@ impl HomeNode {
                 nonce_seed,
                 timeout_ms,
                 None,
+                adapter_context,
             )
             .await?;
+
+        let kv_absorbed = self.absorb_kv(&stage.kv_produced);
 
         Ok(HomeExecutionResponse {
             home_node_id: self.node_id.clone(),
             output: stage.output,
             tokens_produced: stage.tokens_produced,
-            kv_absorbed: stage.kv_produced.len(),
+            kv_absorbed,
             ephemeral_node_id: stage.node_id,
         })
     }
@@ -452,6 +473,24 @@ impl HomeNode {
         decode_nonce_seed: u64,
         timeout_ms: u64,
     ) -> Result<TwoStageOutsourcedResponse, String> {
+        self.execute_two_stage_remote_with_runtime_ctx(
+            client, prefill_atom, decode_atom, input, pool,
+            prefill_nonce_seed, decode_nonce_seed, timeout_ms, None,
+        ).await
+    }
+
+    pub async fn execute_two_stage_remote_with_runtime_ctx(
+        &mut self,
+        client: &RemoteClient,
+        prefill_atom: &ComputeAtom,
+        decode_atom: &ComputeAtom,
+        input: Vec<u8>,
+        pool: &DiscoveryPool,
+        prefill_nonce_seed: u64,
+        decode_nonce_seed: u64,
+        timeout_ms: u64,
+        adapter_context: Option<&crate::adapter::AdapterContext>,
+    ) -> Result<TwoStageOutsourcedResponse, String> {
         let prefill_stage = self
             .execute_remote_stage(
                 client,
@@ -462,6 +501,7 @@ impl HomeNode {
                 prefill_nonce_seed,
                 timeout_ms,
                 None,
+                adapter_context,
             )
             .await?;
 
@@ -473,11 +513,12 @@ impl HomeNode {
             kv_handoff: KVHandoff {
                 source_stage: "prefill".to_string(),
                 chunks: prefill_stage.kv_produced.clone(),
-                metadata: KVHandoffMetadata::from_chunks_with_provenance(
+                metadata: KVHandoffMetadata::from_chunks_with_provenance_ctx(
                     format!("{}:prefill", prefill_atom.id),
                     &prefill_stage.kv_produced,
                     self.node_id.clone(),
                     Some(prefill_stage.node_id.clone()),
+                    adapter_context,
                 ),
             },
             prefill_output: prefill_stage.output.clone(),
@@ -517,6 +558,7 @@ impl HomeNode {
                 decode_nonce_seed,
                 timeout_ms,
                 Some(&prefill_receipt.kv_handoff.metadata.handoff_id),
+                adapter_context,
             )
             .await?;
 
@@ -583,6 +625,7 @@ impl HomeNode {
         nonce_seed: u64,
         timeout_ms: u64,
         handoff_id: Option<&str>,
+        adapter_context: Option<&crate::adapter::AdapterContext>,
     ) -> Result<RemoteStageReceipt, String> {
         let stage = ExecutionStage::for_atom_kind(&atom.kind);
         let prefer_kv = matches!(atom.kind, AtomKind::Decode);
@@ -667,6 +710,13 @@ impl HomeNode {
                         ExecutionStage::General => "general",
                     };
 
+                    let (a_id, a_gen, a_spec) = adapter_context
+                        .map(|ctx| {
+                            let a = ctx.resolve_adapter();
+                            (Some(a.adapter_id.clone()), Some(a.generation), Some(a.specialization.clone()))
+                        })
+                        .unwrap_or((None, None, None));
+
                     return Ok(RemoteStageReceipt {
                         node_id: response.ephemeral_node_id,
                         output: output.clone(),
@@ -683,9 +733,9 @@ impl HomeNode {
                                 kv_produced.iter().map(|c| c.byte_size).sum(),
                             ),
                             handoff_id: handoff_id.map(|s| s.to_string()),
-                            adapter_id: None,
-                            adapter_generation: None,
-                            adapter_specialization: None,
+                            adapter_id: a_id,
+                            adapter_generation: a_gen,
+                            adapter_specialization: a_spec,
                         },
                     });
                 }
@@ -975,17 +1025,33 @@ impl KVHandoffMetadata {
         owner_node_id: String,
         source_node_id: Option<String>,
     ) -> Self {
+        Self::from_chunks_with_provenance_ctx(handoff_id, chunks, owner_node_id, source_node_id, None)
+    }
+
+    pub fn from_chunks_with_provenance_ctx(
+        handoff_id: String,
+        chunks: &[KVChunk],
+        owner_node_id: String,
+        source_node_id: Option<String>,
+        adapter_context: Option<&crate::adapter::AdapterContext>,
+    ) -> Self {
         let chunk_count = chunks.len();
         let total_bytes = chunks.iter().map(|c| c.byte_size).sum();
         let migration_hint = source_node_id.map(|src| format!("from:{}", src));
+        let (adapter_generation, adapter_specialization) = adapter_context
+            .map(|ctx| {
+                let a = ctx.resolve_adapter();
+                (Some(a.generation), Some(a.specialization.clone()))
+            })
+            .unwrap_or((None, None));
         Self {
             handoff_id,
             chunk_count,
             total_bytes,
             ownership_hint: Some(owner_node_id),
             migration_hint,
-            adapter_generation: None,
-            adapter_specialization: None,
+            adapter_generation,
+            adapter_specialization,
         }
     }
 }
