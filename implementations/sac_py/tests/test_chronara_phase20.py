@@ -28,6 +28,7 @@ from implementations.sac_py.chronara_nexus.types import (
     CompatibilityHints,
 )
 from implementations.sac_py.chronara_nexus.governor import Governor, ValidationTrace, AdapterRef, AdapterMode
+from implementations.sac_py.tests.chronara_test_helpers import create_federation_summary
 
 
 class TestCoordinationObjects:
@@ -223,77 +224,13 @@ class TestFederationCoordinator:
 
     def _create_test_summary(self, adapter_id="test-adapter", generation=5):
         """Helper to create a valid federation summary."""
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        return FederationSummary(
-            identity=AdapterIdentitySummary(
-                adapter_id=adapter_id,
-                generation=generation,
-                parent_generation=generation - 1 if generation > 1 else None,
-                specialization="stable",
-                mode="serve",
-            ),
-            specialization=SpecializationSummary(
-                stable_generation=generation,
-                shared_generation=None,
-                candidate_generation=None,
-                active_specialization="stable",
-            ),
-            importance_mask=ImportanceMaskSummary(
-                top_keys=["param1", "param2"],
-                scores={"param1": 0.9, "param2": 0.8},
-                threshold=0.5,
-                compression_ratio=0.2,
-            ),
-            delta_norm=DeltaNormSummary(
-                l1_norm=1.0,
-                l2_norm=0.5,
-                max_abs=0.3,
-                param_count=100,
-                relative_to_parent=0.1,
-            ),
-            validation_score=ValidationScoreSummary(
-                passed=True,
-                lineage_valid=True,
-                specialization_valid=True,
-                output_match=True,
-                kv_count_match=True,
-                generation_advanced=True,
-                score=0.95,
-            ),
-            comparison_outcome=ComparisonOutcomeSummary(
-                status="candidate_observed",
-                promote_recommendation="approve",
-                lineage_valid=True,
-                specialization_valid=True,
-                is_acceptable=True,
-            ),
-            deliberation=DeliberationSummary(
-                outcome="candidate_ready",
-                quality_score=0.9,
-                confidence=0.85,
-                consensus_status="consensus_accept",
-                has_disagreement=False,
-                escalation_used=False,
-            ),
-            snapshot_lineage=SnapshotLineageSummary(
-                snapshot_id=f"{adapter_id}-gen{generation}",
-                adapter_id=adapter_id,
-                generation=generation,
-                specialization="stable",
-                parent_snapshot_id=f"{adapter_id}-gen{generation-1}" if generation > 1 else None,
-                lineage_hash=f"{adapter_id}:{generation}",
-            ),
-            compatibility=CompatibilityHints(
-                min_compatible_generation=generation - 2,
-                max_compatible_generation=generation + 1,
-                required_specialization=None,
-                min_validation_score=0.7,
-                requires_consensus_accept=False,
-                format_version="1.0",
-            ),
-            export_timestamp=now,
-            export_version="1.0",
+        return create_federation_summary(
+            adapter_id=adapter_id,
+            generation=generation,
             source_node="test-node",
+            consensus_status="consensus_accept",
+            has_disagreement=False,
+            min_validation_score=0.7,
         )
 
     def test_coordinator_creation(self):
@@ -478,77 +415,21 @@ class TestGovernorCoordinationIntegration:
 
     def _create_test_summary(self, adapter_id="test-adapter", generation=5):
         """Helper to create a valid federation summary."""
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        return FederationSummary(
-            identity=AdapterIdentitySummary(
-                adapter_id=adapter_id,
-                generation=generation,
-                parent_generation=generation - 1 if generation > 1 else None,
-                specialization="stable",
-                mode="serve",
-            ),
-            specialization=SpecializationSummary(
-                stable_generation=generation,
-                shared_generation=None,
-                candidate_generation=None,
-                active_specialization="stable",
-            ),
-            importance_mask=ImportanceMaskSummary(
-                top_keys=["param1"],
-                scores={"param1": 0.9},
-                threshold=0.5,
-                compression_ratio=0.1,
-            ),
-            delta_norm=DeltaNormSummary(
-                l1_norm=1.0,
-                l2_norm=0.5,
-                max_abs=0.3,
-                param_count=10,
-                relative_to_parent=None,
-            ),
-            validation_score=ValidationScoreSummary(
-                passed=True,
-                lineage_valid=True,
-                specialization_valid=True,
-                output_match=True,
-                kv_count_match=True,
-                generation_advanced=True,
-                score=0.95,
-            ),
-            comparison_outcome=ComparisonOutcomeSummary(
-                status="candidate_observed",
-                promote_recommendation="approve",
-                lineage_valid=True,
-                specialization_valid=True,
-                is_acceptable=True,
-            ),
-            deliberation=DeliberationSummary(
-                outcome="candidate_ready",
-                quality_score=0.9,
-                confidence=0.85,
-                consensus_status=None,
-                has_disagreement=None,
-                escalation_used=False,
-            ),
-            snapshot_lineage=SnapshotLineageSummary(
-                snapshot_id=f"{adapter_id}-gen{generation}",
-                adapter_id=adapter_id,
-                generation=generation,
-                specialization="stable",
-                parent_snapshot_id=None,
-                lineage_hash="hash",
-            ),
-            compatibility=CompatibilityHints(
-                min_compatible_generation=0,
-                max_compatible_generation=10,
-                required_specialization=None,
-                min_validation_score=0.5,
-                requires_consensus_accept=False,
-                format_version="1.0",
-            ),
-            export_timestamp=now,
-            export_version="1.0",
+        return create_federation_summary(
+            adapter_id=adapter_id,
+            generation=generation,
             source_node="test-node",
+            top_keys=["param1"],
+            scores={"param1": 0.9},
+            compression_ratio=0.1,
+            param_count=10,
+            relative_to_parent=None,
+            consensus_status=None,
+            has_disagreement=None,
+            lineage_hash="hash",
+            min_compatible_generation=0,
+            max_compatible_generation=10,
+            min_validation_score=0.5,
         )
 
     def test_governor_can_consume_coordination_result(self):

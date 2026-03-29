@@ -1,7 +1,5 @@
 """Phase 21: Remote federation admission bridge tests."""
 
-from datetime import datetime, timezone
-
 from implementations.sac_py.chronara_nexus.coordinator import (
     CoordinationDecision,
     FederationCoordinator,
@@ -9,166 +7,49 @@ from implementations.sac_py.chronara_nexus.coordinator import (
 )
 from implementations.sac_py.chronara_nexus.governor import Governor, ValidationTrace
 from implementations.sac_py.chronara_nexus.remote_execution_bridge import (
-    BRIDGE_KIND,
     BridgeDecision,
     RemoteExecutionAdmissionBridge,
     prepare_remote_execution_input,
 )
-from implementations.sac_py.chronara_nexus.types import (
-    AdapterIdentitySummary,
-    AdapterMode,
-    AdapterRef,
-    ComparisonOutcomeSummary,
-    CompatibilityHints,
-    DeliberationSummary,
-    DeltaNormSummary,
-    FederationSummary,
-    ImportanceMaskSummary,
-    SnapshotLineageSummary,
-    SpecializationSummary,
-    ValidationScoreSummary,
+from implementations.sac_py.chronara_nexus.types import AdapterMode, AdapterRef
+from implementations.sac_py.tests.chronara_test_helpers import (
+    create_bridge_payload,
+    create_federation_summary,
 )
 
 
-def create_local_summary(adapter_id: str = "bridge-adapter", generation: int = 1) -> FederationSummary:
-    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    return FederationSummary(
-        identity=AdapterIdentitySummary(
-            adapter_id=adapter_id,
-            generation=generation,
-            parent_generation=None,
-            specialization="stable",
-            mode="serve",
-        ),
-        specialization=SpecializationSummary(
-            stable_generation=generation,
-            shared_generation=None,
-            candidate_generation=None,
-            active_specialization="stable",
-        ),
-        importance_mask=ImportanceMaskSummary(
-            top_keys=["p1"],
-            scores={"p1": 1.0},
-            threshold=1.0,
-            compression_ratio=0.1,
-        ),
-        delta_norm=DeltaNormSummary(
-            l1_norm=1.0,
-            l2_norm=0.5,
-            max_abs=0.2,
-            param_count=10,
-            relative_to_parent=None,
-        ),
-        validation_score=ValidationScoreSummary(
-            passed=False,
-            lineage_valid=False,
-            specialization_valid=False,
-            output_match=False,
-            kv_count_match=False,
-            generation_advanced=False,
-            score=0.0,
-        ),
-        comparison_outcome=ComparisonOutcomeSummary(
-            status="unknown",
-            promote_recommendation="undecided",
-            lineage_valid=False,
-            specialization_valid=False,
-            is_acceptable=False,
-        ),
-        deliberation=DeliberationSummary(
-            outcome="candidate_ready",
-            quality_score=0.5,
-            confidence=0.5,
-            consensus_status=None,
-            has_disagreement=None,
-            escalation_used=False,
-        ),
-        snapshot_lineage=SnapshotLineageSummary(
-            snapshot_id=f"{adapter_id}-gen{generation}",
-            adapter_id=adapter_id,
-            generation=generation,
-            specialization="stable",
-            parent_snapshot_id=None,
-            lineage_hash=f"{adapter_id}:{generation}:stable",
-        ),
-        compatibility=CompatibilityHints(
-            min_compatible_generation=0,
-            max_compatible_generation=generation + 1,
-            required_specialization=None,
-            min_validation_score=0.5,
-            requires_consensus_accept=False,
-            format_version="1.0",
-        ),
-        export_timestamp=now,
-        export_version="1.0",
+def create_local_summary(adapter_id: str = "bridge-adapter", generation: int = 1):
+    return create_federation_summary(
+        adapter_id=adapter_id,
+        generation=generation,
         source_node="local-node",
+        parent_generation=None,
+        top_keys=["p1"],
+        scores={"p1": 1.0},
+        threshold=1.0,
+        compression_ratio=0.1,
+        max_abs=0.2,
+        param_count=10,
+        relative_to_parent=None,
+        validation_passed=False,
+        validation_score=0.0,
+        lineage_valid=False,
+        specialization_valid=False,
+        output_match=False,
+        kv_count_match=False,
+        generation_advanced=False,
+        comparison_status="unknown",
+        comparison_recommendation="undecided",
+        comparison_acceptable=False,
+        quality_score=0.5,
+        confidence=0.5,
+        consensus_status=None,
+        has_disagreement=None,
+        lineage_hash=f"{adapter_id}:{generation}:stable",
+        min_compatible_generation=0,
+        max_compatible_generation=generation + 1,
+        min_validation_score=0.5,
     )
-
-
-def create_bridge_payload(
-    decision: str = "bridge_accept",
-    adapter_id: str = "bridge-adapter",
-    generation: int = 2,
-    specialization: str = "stable",
-) -> dict:
-    acceptable = decision != BridgeDecision.BRIDGE_REJECT.value
-    kv_migrated = decision == BridgeDecision.BRIDGE_HOLD.value
-    return {
-        "bridge_kind": BRIDGE_KIND,
-        "identity": {
-            "execution_id": f"exec-{decision}",
-            "execution_kind": "two_stage_remote_execution",
-            "source_node_id": "remote-node",
-            "source_tag": "decode",
-            "home_node_id": "home-node",
-        },
-        "stage_summary": {
-            "stage": "two_stage",
-            "tokens_produced": 8,
-            "kv_absorbed": 2,
-            "kv_migrated": kv_migrated,
-            "receipt": None,
-            "prefill_receipt": {
-                "stage_id": "atom-1:prefill",
-                "stage_kind": "prefill",
-                "owner_node_id": "home-node",
-                "output_size": 3,
-                "kv_chunk_count": 1,
-                "kv_total_bytes": 8,
-                "handoff_id": "atom-1:prefill",
-            },
-            "decode_receipt": {
-                "stage_id": "atom-1:decode",
-                "stage_kind": "decode",
-                "owner_node_id": "home-node",
-                "output_size": 4,
-                "kv_chunk_count": 1,
-                "kv_total_bytes": 8,
-                "handoff_id": "atom-1:prefill",
-            },
-        },
-        "validation_summary": {
-            "receipt_verified": acceptable,
-            "handoff_verified": acceptable,
-            "output_match": acceptable,
-            "lineage_complete": acceptable,
-            "lineage_consistent": acceptable,
-            "specialization_attached": acceptable,
-            "remote_execution_acceptable": acceptable,
-        },
-        "adapter_lineage": {
-            "adapter_id": adapter_id,
-            "adapter_generation": generation,
-            "specialization": specialization,
-        },
-        "remote_execution_acceptable": acceptable,
-        "bridge_decision": decision,
-        "recommendation": "bridge_into_remote_intake" if acceptable else "retain_trace_only",
-        "reason": f"phase21_{decision}",
-        "fallback_used": False,
-        "version": "1.0",
-        "timestamp": "1970-01-01T00:00:00Z",
-    }
 
 
 class TestRemoteExecutionBridgeObjects:
