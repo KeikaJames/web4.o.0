@@ -1,7 +1,9 @@
 """Tests for the action governance boundary (adapter)."""
 
 from implementations.sac_py.sac import SACContainer
+from implementations.compat_py import adapter as adapter_module
 from implementations.compat_py.adapter import file_write
+from implementations.compat_py.path_security import resolve_within_memory_root as real_resolve_within_memory_root
 from implementations.compat_py.types import AdapterRequest, AdapterResult, AuditEntry, ReasonCode
 
 
@@ -144,6 +146,32 @@ def test_write_creates_parent_dirs(tmp_path):
 
     assert result.performed is True
     assert target.read_text() == "nested"
+
+
+def test_write_rejects_symlinked_ancestor_planted_after_resolution(tmp_path, monkeypatch):
+    memory_root = tmp_path / "memory"
+    outside = tmp_path / "outside"
+    memory_root.mkdir()
+    outside.mkdir()
+    sac = SACContainer.create(memory_path=str(memory_root))
+
+    def plant_symlink_after_resolution(sac_obj, requested_path, *, must_exist):
+        target = real_resolve_within_memory_root(sac_obj, requested_path, must_exist=must_exist)
+        (memory_root / "subdir").symlink_to(outside, target_is_directory=True)
+        return target
+
+    monkeypatch.setattr(adapter_module, "resolve_within_memory_root", plant_symlink_after_resolution)
+
+    result, audit = file_write(sac, AdapterRequest(
+        operation="file.write",
+        target="subdir/escape.txt",
+        content="blocked",
+    ))
+
+    assert result.performed is False
+    assert result.reason_code == ReasonCode.TARGET_NOT_ALLOWED
+    assert not (outside / "escape.txt").exists()
+    assert audit.reason_code == ReasonCode.TARGET_NOT_ALLOWED
 
 
 def test_result_includes_resolved_target(tmp_path):

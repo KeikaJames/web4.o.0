@@ -17,6 +17,7 @@ reqwest = { version = "0.12", features = ["json"] }
 ash = { version = "0.38", default-features = false, features = ["loaded"] }
 libloading = "0.8"
 native-tls = "0.2"
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3.10"

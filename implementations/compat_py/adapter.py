@@ -12,7 +12,10 @@ import os
 import tempfile
 from typing import Tuple
 
-from implementations.compat_py.path_security import resolve_within_memory_root
+from implementations.compat_py.path_security import (
+    ensure_write_target_within_memory_root,
+    resolve_within_memory_root,
+)
 from implementations.compat_py.types import (
     AdapterRequest,
     AdapterResult,
@@ -54,24 +57,25 @@ def _check_permission(sac, request: AdapterRequest) -> Tuple[bool, ReasonCode, s
     return True, ReasonCode.SUCCESS, reason
 
 
-def _safe_write(target_path, content_bytes: bytes) -> None:
+def _safe_write(sac, target_path, content_bytes: bytes) -> None:
     """
     Atomic, symlink-safe file write.
 
-    1. Create parent directories (exist_ok) — directories themselves are not
-       followed through a symlink race because mkdir is not affected.
+    1. Re-validate the parent chain inside memory_root and create any missing
+       directories only if they are plain directories, not symlinks.
     2. Write to a temp file in the same directory.
     3. Use os.open() with O_NOFOLLOW on the final path before rename so that
        if a symlink was planted between resolve() and the write, the open
        fails with OSError rather than following the link.
-    4. Rename the temp file into place (atomic on POSIX).
+    4. Re-check the parent chain, then rename the temp file into place
+       (atomic on POSIX).
 
     O_NOFOLLOW is POSIX-only.  On Windows (no O_NOFOLLOW) we fall back to the
     rename-only path, which still defends against most races but not a
     concurrent symlink replacement — acceptable for a prototype on POSIX.
     """
+    target_path = ensure_write_target_within_memory_root(sac, target_path)
     parent = target_path.parent
-    parent.mkdir(parents=True, exist_ok=True)
 
     # Write to a temp file first (never follows symlinks at its own path)
     fd, tmp_path = tempfile.mkstemp(dir=str(parent), prefix=".tmp_")
@@ -105,6 +109,7 @@ def _safe_write(target_path, content_bytes: bytes) -> None:
                     ) from exc
                 raise
 
+        target_path = ensure_write_target_within_memory_root(sac, target_path)
         os.replace(tmp_path, str(target_path))
         tmp_path = None  # ownership transferred
     finally:
@@ -139,7 +144,7 @@ def file_write(sac, request: AdapterRequest) -> Tuple[AdapterResult, AuditEntry]
 
     try:
         content_bytes = request.content.encode("utf-8")
-        _safe_write(target, content_bytes)
+        _safe_write(sac, target, content_bytes)
     except PermissionError as e:
         result = AdapterResult(
             performed=False,

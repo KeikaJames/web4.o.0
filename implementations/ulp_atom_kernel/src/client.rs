@@ -1,13 +1,128 @@
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+use std::time::Duration;
+
 use crate::kernel::{AtomRequest, AtomResponse};
 use crate::runtime::{SlotClaim, SlotClaimResponse};
 use crate::sovereignty::{BlindedAtomRequest, BlindedAtomResponse, RemoteExecutionError};
-use std::net::ToSocketAddrs;
-use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum EndpointTrust {
     Enforce,
     Trusted,
+}
+
+#[derive(Clone, Debug)]
+pub struct ResolvedEndpoint {
+    url: reqwest::Url,
+    host: String,
+    authority: String,
+    socket_addrs: Vec<SocketAddr>,
+}
+
+impl ResolvedEndpoint {
+    fn parse(url: &str, endpoint_trust: EndpointTrust) -> Result<Self, String> {
+        let mut parsed = reqwest::Url::parse(url)
+            .map_err(|e| format!("endpoint URL parse failed for '{}': {}", url, e))?;
+
+        if parsed.scheme() != "http" && parsed.scheme() != "https" {
+            return Err(format!(
+                "endpoint URL must use http:// or https://, got: '{}'",
+                url
+            ));
+        }
+
+        let host = parsed
+            .host_str()
+            .ok_or_else(|| format!("endpoint URL is missing a host: '{}'", url))?
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .trim_end_matches('.')
+            .to_ascii_lowercase();
+
+        const BLOCKED_HOSTS: &[&str] = &[
+            "localhost",
+            "169.254.169.254",
+            "metadata.google.internal",
+            "metadata.goog",
+        ];
+        if endpoint_trust == EndpointTrust::Enforce && BLOCKED_HOSTS.contains(&host.as_str()) {
+            return Err(format!("endpoint URL targets a blocked host: '{}'", host));
+        }
+
+        if host.parse::<IpAddr>().is_err() {
+            parsed
+                .set_host(Some(&host))
+                .map_err(|_| format!("endpoint URL contains an invalid host: '{}'", url))?;
+        }
+
+        let port = parsed
+            .port_or_known_default()
+            .ok_or_else(|| format!("endpoint URL is missing a usable port: '{}'", url))?;
+        let socket_addrs: Vec<_> = (host.as_str(), port)
+            .to_socket_addrs()
+            .map_err(|e| format!("endpoint URL host resolution failed for '{}': {}", host, e))?
+            .collect();
+        if socket_addrs.is_empty() {
+            return Err(format!(
+                "endpoint URL host resolution returned no addresses for '{}'",
+                host
+            ));
+        }
+
+        if endpoint_trust == EndpointTrust::Enforce {
+            for addr in &socket_addrs {
+                if is_blocked_ip(&addr.ip()) {
+                    return Err(format!(
+                        "endpoint URL targets a blocked IP range: '{}'",
+                        addr.ip()
+                    ));
+                }
+            }
+        }
+
+        Ok(Self {
+            authority: format_authority(&host, parsed.port()),
+            url: parsed,
+            host,
+            socket_addrs,
+        })
+    }
+
+    pub fn url(&self) -> &reqwest::Url {
+        &self.url
+    }
+
+    pub fn authority(&self) -> &str {
+        &self.authority
+    }
+
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    pub fn socket_addrs(&self) -> &[SocketAddr] {
+        &self.socket_addrs
+    }
+
+    pub fn request_target(&self) -> String {
+        match self.url.query() {
+            Some(query) => format!("{}?{}", self.url.path(), query),
+            None => self.url.path().to_string(),
+        }
+    }
+
+    fn build_http_client(&self, timeout: Duration) -> Result<reqwest::Client, String> {
+        let builder = reqwest::Client::builder().no_proxy().timeout(timeout);
+        let builder = if self.host.parse::<IpAddr>().is_err() {
+            builder.resolve_to_addrs(self.host.as_str(), &self.socket_addrs)
+        } else {
+            builder
+        };
+
+        builder
+            .build()
+            .map_err(|e| format!("failed to build http client: {e}"))
+    }
 }
 
 /// Validate that a URL is safe to connect to.
@@ -17,62 +132,33 @@ enum EndpointTrust {
 /// - RFC 1918 private ranges (10.x, 172.16-31.x, 192.168.x)
 /// - Loopback (127.x / ::1)
 /// - Link-local (169.254.x / fe80::)
+/// - IPv6 unique-local ranges (fc00::/7)
 /// - AWS/GCP/Azure metadata service addresses
 pub fn validate_endpoint_url(url: &str) -> Result<(), String> {
-    let parsed = reqwest::Url::parse(url)
-        .map_err(|e| format!("endpoint URL parse failed for '{}': {}", url, e))?;
-
-    if parsed.scheme() != "http" && parsed.scheme() != "https" {
-        return Err(format!(
-            "endpoint URL must use http:// or https://, got: '{}'",
-            url
-        ));
-    }
-
-    let host = parsed
-        .host_str()
-        .ok_or_else(|| format!("endpoint URL is missing a host: '{}'", url))?
-        .trim_end_matches('.')
-        .to_ascii_lowercase();
-
-    const BLOCKED_HOSTS: &[&str] = &[
-        "localhost",
-        "169.254.169.254",
-        "metadata.google.internal",
-        "metadata.goog",
-    ];
-    if BLOCKED_HOSTS.contains(&host.as_str()) {
-        return Err(format!("endpoint URL targets a blocked host: '{}'", host));
-    }
-
-    let port = parsed
-        .port_or_known_default()
-        .ok_or_else(|| format!("endpoint URL is missing a usable port: '{}'", url))?;
-    let resolved: Vec<_> = (host.as_str(), port)
-        .to_socket_addrs()
-        .map_err(|e| format!("endpoint URL host resolution failed for '{}': {}", host, e))?
-        .collect();
-    if resolved.is_empty() {
-        return Err(format!(
-            "endpoint URL host resolution returned no addresses for '{}'",
-            host
-        ));
-    }
-
-    for addr in resolved {
-        if is_blocked_ip(&addr.ip()) {
-            return Err(format!(
-                "endpoint URL targets a blocked IP range: '{}'",
-                addr.ip()
-            ));
-        }
-    }
-
-    Ok(())
+    resolve_endpoint_url(url).map(|_| ())
 }
 
-fn is_blocked_ip(ip: &std::net::IpAddr) -> bool {
-    use std::net::IpAddr;
+pub fn resolve_endpoint_url(url: &str) -> Result<ResolvedEndpoint, String> {
+    ResolvedEndpoint::parse(url, EndpointTrust::Enforce)
+}
+
+pub fn resolve_endpoint_url_trusted(url: &str) -> Result<ResolvedEndpoint, String> {
+    ResolvedEndpoint::parse(url, EndpointTrust::Trusted)
+}
+
+fn format_authority(host: &str, explicit_port: Option<u16>) -> String {
+    let rendered_host = if host.contains(':') {
+        format!("[{}]", host)
+    } else {
+        host.to_string()
+    };
+    match explicit_port {
+        Some(port) => format!("{rendered_host}:{port}"),
+        None => rendered_host,
+    }
+}
+
+fn is_blocked_ip(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
             let o = v4.octets();
@@ -84,14 +170,22 @@ fn is_blocked_ip(ip: &std::net::IpAddr) -> bool {
                 || v4.is_unspecified()
         }
         IpAddr::V6(v6) => {
-            v6.is_loopback() || (v6.segments()[0] & 0xffc0 == 0xfe80) || v6.is_unspecified()
+            if let Some(mapped_v4) = v6.to_ipv4_mapped() {
+                return is_blocked_ip(&IpAddr::V4(mapped_v4));
+            }
+
+            let first_segment = v6.segments()[0];
+            v6.is_loopback()
+                || (first_segment & 0xffc0 == 0xfe80)
+                || (first_segment & 0xfe00 == 0xfc00)
+                || v6.is_unspecified()
         }
     }
 }
 
 pub struct RemoteClient {
-    pub(crate) client: reqwest::Client,
     endpoint_trust: EndpointTrust,
+    default_timeout: Duration,
 }
 
 impl RemoteClient {
@@ -108,28 +202,21 @@ impl RemoteClient {
 
     fn with_trust(endpoint_trust: EndpointTrust) -> Self {
         Self {
-            client: reqwest::Client::builder()
-                .no_proxy()
-                .timeout(Duration::from_secs(30))
-                .build()
-                .expect("failed to build http client"),
             endpoint_trust,
+            default_timeout: Duration::from_secs(30),
         }
     }
 
-    fn validate_if_required(&self, url: &str) -> Result<(), String> {
-        if self.endpoint_trust == EndpointTrust::Enforce {
-            validate_endpoint_url(url)?;
-        }
-        Ok(())
+    fn resolve_endpoint(&self, url: &str) -> Result<ResolvedEndpoint, String> {
+        ResolvedEndpoint::parse(url, self.endpoint_trust)
     }
 
     pub async fn dispatch(&self, url: &str, request: AtomRequest) -> Result<AtomResponse, String> {
-        self.validate_if_required(url)?;
+        let endpoint = self.resolve_endpoint(url)?;
+        let client = endpoint.build_http_client(self.default_timeout)?;
 
-        let response = self
-            .client
-            .post(url)
+        let response = client
+            .post(endpoint.url().clone())
             .json(&request)
             .send()
             .await
@@ -152,12 +239,11 @@ impl RemoteClient {
         url: &str,
         claim: &SlotClaim,
     ) -> Result<SlotClaimResponse, String> {
-        self.validate_if_required(url)?;
+        let endpoint = self.resolve_endpoint(url)?;
+        let client = endpoint.build_http_client(Duration::from_millis(claim.timeout_ms.max(1)))?;
 
-        let response = self
-            .client
-            .post(url)
-            .timeout(Duration::from_millis(claim.timeout_ms.max(1)))
+        let response = client
+            .post(endpoint.url().clone())
             .json(claim)
             .send()
             .await
@@ -187,12 +273,11 @@ impl RemoteClient {
         request: &BlindedAtomRequest,
         timeout_ms: u64,
     ) -> Result<BlindedAtomResponse, String> {
-        self.validate_if_required(url)?;
+        let endpoint = self.resolve_endpoint(url)?;
+        let client = endpoint.build_http_client(Duration::from_millis(timeout_ms.max(1)))?;
 
-        let response = self
-            .client
-            .post(url)
-            .timeout(Duration::from_millis(timeout_ms.max(1)))
+        let response = client
+            .post(endpoint.url().clone())
             .json(request)
             .send()
             .await
@@ -242,5 +327,47 @@ async fn parse_remote_execute_error(response: reqwest::Response) -> String {
         )
     } else {
         format!("blinded execute server error {status}: {body}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        resolve_endpoint_url, resolve_endpoint_url_trusted, validate_endpoint_url,
+    };
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+
+    #[test]
+    fn validation_rejects_loopback_and_private_targets() {
+        assert!(validate_endpoint_url("http://127.0.0.1:3000").is_err());
+        assert!(validate_endpoint_url("http://10.1.2.3:3000").is_err());
+        assert!(validate_endpoint_url("http://[fc00::1]:3000").is_err());
+    }
+
+    #[test]
+    fn trusted_resolution_preserves_resolved_addresses() {
+        let endpoint = resolve_endpoint_url_trusted("http://127.0.0.1:3000/path?q=1").unwrap();
+        assert_eq!(endpoint.host(), "127.0.0.1");
+        assert_eq!(endpoint.authority(), "127.0.0.1:3000");
+        assert_eq!(endpoint.request_target(), "/path?q=1");
+        assert_eq!(
+            endpoint.socket_addrs(),
+            &[SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3000)]
+        );
+    }
+
+    #[test]
+    fn trusted_resolution_formats_ipv6_authority() {
+        let endpoint = resolve_endpoint_url_trusted("http://[::1]:8080/").unwrap();
+        assert_eq!(endpoint.authority(), "[::1]:8080");
+        assert_eq!(
+            endpoint.socket_addrs(),
+            &[SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 8080)]
+        );
+    }
+
+    #[test]
+    fn enforced_resolution_rejects_loopback_after_resolution() {
+        assert!(resolve_endpoint_url("http://[::1]:8080").is_err());
     }
 }

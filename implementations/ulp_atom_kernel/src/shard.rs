@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// Unique shard identifier.
 pub type ShardId = String;
@@ -51,12 +52,9 @@ impl ShardManifest {
 
     /// Load all shards from the manifest.
     ///
-    /// Validates remote shard URLs against private IP ranges before loading
-    /// to prevent SSRF when manifests come from untrusted sources.
+    /// Validates and loads remote shard URLs against concrete resolved socket
+    /// addresses to prevent SSRF when manifests come from untrusted sources.
     pub fn load_all_shards(&self) -> Result<Vec<LoadedShard>, String> {
-        for shard in &self.shards {
-            validate_remote_shard(shard, self.base_url.as_deref())?;
-        }
         self.shards
             .iter()
             .map(|shard| load_shard_from_manifest(shard, self))
@@ -75,16 +73,14 @@ pub struct LoadedShard {
 
 /// Load a shard from its source. Supports local filesystem and plain HTTP.
 pub fn load_shard(shard: &ShardRef) -> Result<LoadedShard, String> {
-    validate_remote_shard(shard, None)?;
-    load_shard_with_base(shard, None)
+    load_shard_with_base(shard, None, false)
 }
 
 /// Explicitly load a shard without endpoint trust checks.
 ///
 /// This is intended only for tests and trusted local development flows.
 pub fn load_shard_trusted(shard: &ShardRef) -> Result<LoadedShard, String> {
-    require_remote_checksum(shard)?;
-    load_shard_with_base(shard, None)
+    load_shard_with_base(shard, None, true)
 }
 
 /// Load a shard from manifest context (allows base_url override).
@@ -93,14 +89,13 @@ pub fn load_shard_trusted(shard: &ShardRef) -> Result<LoadedShard, String> {
 /// without checksums on remote shards is rejected to prevent model
 /// substitution attacks.
 ///
-/// SSRF validation (blocking private / loopback resolution) is enforced
-/// on every call.
+/// SSRF validation and socket pinning (blocking private / loopback
+/// resolution) are enforced on every call.
 pub fn load_shard_from_manifest(
     shard: &ShardRef,
     manifest: &ShardManifest,
 ) -> Result<LoadedShard, String> {
-    validate_remote_shard(shard, manifest.base_url.as_deref())?;
-    load_shard_with_base(shard, manifest.base_url.as_deref())
+    load_shard_with_base(shard, manifest.base_url.as_deref(), false)
 }
 
 /// Explicitly load a manifest shard without endpoint trust checks.
@@ -110,16 +105,23 @@ pub fn load_shard_from_manifest_trusted(
     shard: &ShardRef,
     manifest: &ShardManifest,
 ) -> Result<LoadedShard, String> {
-    require_remote_checksum(shard)?;
-    load_shard_with_base(shard, manifest.base_url.as_deref())
+    load_shard_with_base(shard, manifest.base_url.as_deref(), true)
 }
 
-fn load_shard_with_base(shard: &ShardRef, base_url: Option<&str>) -> Result<LoadedShard, String> {
+fn load_shard_with_base(
+    shard: &ShardRef,
+    base_url: Option<&str>,
+    trusted: bool,
+) -> Result<LoadedShard, String> {
+    require_remote_checksum(shard)?;
+
     let data = match &shard.source {
         ShardSource::Local(path) => load_local(path)?,
         ShardSource::Http(url) => {
             let resolved = resolve_http_url(url, base_url);
-            load_http(&resolved)?
+            let endpoint = resolve_remote_endpoint(&resolved, trusted)
+                .map_err(|e| format!("shard '{}' URL blocked: {}", shard.shard_id, e))?;
+            load_http(&endpoint)?
         }
         ShardSource::ObjectStore {
             endpoint,
@@ -130,7 +132,9 @@ fn load_shard_with_base(shard: &ShardRef, base_url: Option<&str>) -> Result<Load
             let url = config
                 .resolve_url()
                 .map_err(|e| format!("shard objectstore resolve '{}': {}", shard.shard_id, e))?;
-            load_http(&url)?
+            let endpoint = resolve_remote_endpoint(&url, trusted)
+                .map_err(|e| format!("shard '{}' URL blocked: {}", shard.shard_id, e))?;
+            load_http(&endpoint)?
         }
     };
 
@@ -146,9 +150,9 @@ fn load_shard_with_base(shard: &ShardRef, base_url: Option<&str>) -> Result<Load
         }
     }
 
-    // Simple checksum verification (if provided)
+    // Cryptographic checksum verification (if provided)
     let checksum_verified = if let Some(expected) = &shard.checksum {
-        let actual = simple_checksum(&data);
+        let actual = sha256_checksum(&data);
         if actual != *expected {
             return Err(format!(
                 "shard '{}' checksum mismatch: expected {}, got {}",
@@ -172,62 +176,47 @@ fn load_local(path: &str) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|e| format!("shard load local '{}': {}", path, e))
 }
 
-fn load_http(url: &str) -> Result<Vec<u8>, String> {
+fn load_http(endpoint: &crate::client::ResolvedEndpoint) -> Result<Vec<u8>, String> {
     use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::time::Duration;
 
-    // Support both http:// and https://
-    let (scheme, raw) = if let Some(r) = url.strip_prefix("https://") {
-        ("https", r)
-    } else if let Some(r) = url.strip_prefix("http://") {
-        ("http", r)
-    } else {
-        return Err(format!(
-            "shard load http: only http:// and https:// supported, got '{}'",
-            url
-        ));
-    };
-
-    let (host_port, path) = match raw.find('/') {
-        Some(i) => (&raw[..i], &raw[i..]),
-        None => (raw, "/"),
-    };
-
-    let default_port = if scheme == "https" { 443 } else { 80 };
-    let addr = if host_port.contains(':') {
-        host_port.to_string()
-    } else {
-        format!("{}:{}", host_port, default_port)
-    };
-
-    use std::net::ToSocketAddrs;
-    let sock_addr = addr
-        .to_socket_addrs()
-        .map_err(|e| format!("shard http resolve '{}': {}", addr, e))?
-        .next()
-        .ok_or_else(|| format!("shard http resolve '{}': no addresses found", addr))?;
-
-    let mut stream = TcpStream::connect_timeout(&sock_addr, Duration::from_secs(5))
-        .map_err(|e| format!("shard http connect '{}': {}", addr, e))?;
+    let mut last_connect_error = None;
+    let mut stream = None;
+    for sock_addr in endpoint.socket_addrs() {
+        match TcpStream::connect_timeout(sock_addr, Duration::from_secs(5)) {
+            Ok(connected) => {
+                stream = Some(connected);
+                break;
+            }
+            Err(err) => last_connect_error = Some(format!("{}: {}", sock_addr, err)),
+        }
+    }
+    let mut stream = stream.ok_or_else(|| {
+        format!(
+            "shard http connect '{}': {}",
+            endpoint.url(),
+            last_connect_error.unwrap_or_else(|| "no reachable addresses".to_string())
+        )
+    })?;
     stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
 
     // For https, wrap in TLS
     let mut buf = Vec::new();
-    if scheme == "https" {
+    if endpoint.url().scheme() == "https" {
         let connector = native_tls::TlsConnector::builder()
             .danger_accept_invalid_certs(false)
             .build()
             .map_err(|e| format!("shard https tls setup: {}", e))?;
 
-        let host_name = host_port.split(':').next().unwrap_or(host_port);
         let mut tls_stream = connector
-            .connect(host_name, stream)
+            .connect(endpoint.host(), stream)
             .map_err(|e| format!("shard https tls connect: {}", e))?;
 
         let req = format!(
             "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-            path, host_name
+            endpoint.request_target(),
+            endpoint.authority()
         );
         tls_stream
             .write_all(req.as_bytes())
@@ -239,7 +228,8 @@ fn load_http(url: &str) -> Result<Vec<u8>, String> {
     } else {
         let req = format!(
             "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-            path, host_port
+            endpoint.request_target(),
+            endpoint.authority()
         );
         stream
             .write_all(req.as_bytes())
@@ -272,23 +262,19 @@ fn load_http(url: &str) -> Result<Vec<u8>, String> {
         .ok_or_else(|| format!("shard http: invalid status line '{}'", status_line))?;
 
     if status_code != 200 {
-        return Err(format!("shard http '{}': got HTTP {}", url, status_code));
+        return Err(format!(
+            "shard http '{}': got HTTP {}",
+            endpoint.url(),
+            status_code
+        ));
     }
 
     Ok(buf[hdr_end + 4..].to_vec())
 }
 
-/// Simple checksum (FNV-1a hash as hex string) for shard verification.
-fn simple_checksum(data: &[u8]) -> String {
-    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
-    const FNV_PRIME: u64 = 0x100000001b3;
-
-    let mut hash = FNV_OFFSET;
-    for &byte in data {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    format!("{:016x}", hash)
+/// SHA-256 checksum for shard verification.
+fn sha256_checksum(data: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(data))
 }
 
 fn resolve_http_url(url: &str, base_url: Option<&str>) -> String {
@@ -319,28 +305,52 @@ fn require_remote_checksum(shard: &ShardRef) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_remote_shard(shard: &ShardRef, base_url: Option<&str>) -> Result<(), String> {
-    require_remote_checksum(shard)?;
+fn resolve_remote_endpoint(
+    url: &str,
+    trusted: bool,
+) -> Result<crate::client::ResolvedEndpoint, String> {
+    if trusted {
+        crate::client::resolve_endpoint_url_trusted(url)
+    } else {
+        crate::client::resolve_endpoint_url(url)
+    }
+}
 
-    match &shard.source {
-        ShardSource::Http(url) => {
-            let resolved = resolve_http_url(url, base_url);
-            crate::client::validate_endpoint_url(&resolved)
-                .map_err(|e| format!("shard '{}' URL blocked: {}", shard.shard_id, e))?;
-        }
-        ShardSource::ObjectStore {
-            endpoint,
-            bucket,
-            key,
-        } => {
-            let url = crate::object_store::ObjectStoreConfig::new(endpoint, bucket, key)
-                .resolve_url()
-                .map_err(|e| format!("shard objectstore resolve '{}': {}", shard.shard_id, e))?;
-            crate::client::validate_endpoint_url(&url)
-                .map_err(|e| format!("shard '{}' URL blocked: {}", shard.shard_id, e))?;
-        }
-        ShardSource::Local(_) => {}
+#[cfg(test)]
+mod tests {
+    use super::{load_shard, sha256_checksum, ShardRef, ShardSource};
+
+    #[test]
+    fn local_shard_checksum_uses_sha256() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("model.bin");
+        std::fs::write(&path, b"abc").unwrap();
+
+        let shard = ShardRef {
+            shard_id: "local".to_string(),
+            source: ShardSource::Local(path.to_string_lossy().into_owned()),
+            byte_size: Some(3),
+            checksum: Some(sha256_checksum(b"abc")),
+        };
+
+        let loaded = load_shard(&shard).unwrap();
+        assert!(loaded.checksum_verified);
     }
 
-    Ok(())
+    #[test]
+    fn local_shard_rejects_legacy_fnv_checksum_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("model.bin");
+        std::fs::write(&path, b"abc").unwrap();
+
+        let shard = ShardRef {
+            shard_id: "local".to_string(),
+            source: ShardSource::Local(path.to_string_lossy().into_owned()),
+            byte_size: Some(3),
+            checksum: Some("e71fa2190541574b".to_string()),
+        };
+
+        let err = load_shard(&shard).unwrap_err();
+        assert!(err.contains("checksum mismatch"));
+    }
 }
