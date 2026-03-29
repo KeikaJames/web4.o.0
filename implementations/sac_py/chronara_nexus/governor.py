@@ -60,6 +60,8 @@ class ValidationTrace:
         self.promotion_execution_summary: Optional[Dict[str, Any]] = None
         # Phase 20: Coordination summary
         self.coordination_summary: Optional[Dict[str, Any]] = None
+        # Phase 21: Remote execution bridge summary
+        self.remote_execution_bridge_summary: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         result = {
@@ -97,6 +99,8 @@ class ValidationTrace:
             result["promotion_execution_summary"] = self.promotion_execution_summary
         if self.coordination_summary:
             result["coordination_summary"] = self.coordination_summary
+        if self.remote_execution_bridge_summary:
+            result["remote_execution_bridge_summary"] = self.remote_execution_bridge_summary
         return result
 
 
@@ -1169,16 +1173,28 @@ class Governor:
             RemoteIntakeResult with full intake and staging information
         """
         from .intake_processor import RemoteIntakeProcessor
+        from .remote_execution_bridge import BridgeDecision, prepare_remote_execution_input
 
         try:
             # Extract local summary for comparison
             local_summary = self.extract_federation_summary()
+            prepared = prepare_remote_execution_input(
+                remote_payload=remote_summary_dict,
+                local_summary=local_summary,
+                source_node=source_node,
+            )
+
+            if prepared.bridge_summary:
+                self._record_remote_execution_bridge(prepared.bridge_summary)
+
+            if prepared.bridge_decision == BridgeDecision.BRIDGE_REJECT:
+                return self._bridge_reject_intake_result(prepared)
 
             # Process intake
             result = RemoteIntakeProcessor.process_intake(
-                remote_summary_dict=remote_summary_dict,
+                remote_summary_dict=prepared.normalized_summary_dict,
                 local_summary=local_summary,
-                source_node=source_node,
+                source_node=prepared.source_node,
             )
 
             # Record in traces if staging succeeded
@@ -1190,6 +1206,50 @@ class Governor:
         except Exception:
             # Failure safety: return reject result
             return self._fallback_intake_result(remote_summary_dict, source_node)
+
+    def _record_remote_execution_bridge(self, bridge_summary: Dict[str, Any]) -> bool:
+        """Record remote execution bridge summary in validation traces."""
+        try:
+            if self._validation_traces:
+                self._validation_traces[-1].remote_execution_bridge_summary = bridge_summary
+            return True
+        except Exception:
+            return False
+
+    def _bridge_reject_intake_result(
+        self,
+        prepared_input: "PreparedRemoteInput",
+    ) -> "RemoteIntakeResult":
+        """Create structured reject result for bridge_reject payloads."""
+        from .types import RemoteIntakeResult, RemoteSummaryIntake, StagingDecision
+
+        processed_at = _utc_now()
+        intake = RemoteSummaryIntake(
+            remote_adapter_id=prepared_input.adapter_id,
+            remote_generation=prepared_input.generation,
+            remote_source_node=prepared_input.source_node,
+            intake_timestamp=processed_at,
+            intake_version="1.0",
+            raw_summary_hash=prepared_input.bridge_summary.get("execution_id", "bridge-reject") if prepared_input.bridge_summary else "bridge-reject",
+            structure_valid=True,
+            required_fields_present=True,
+            validation_errors=[prepared_input.reject_reason or "bridge_rejected"],
+            exchange_gate=None,
+        )
+        return RemoteIntakeResult(
+            processed_at=processed_at,
+            processor_version="1.0",
+            fallback_used=False,
+            intake=intake,
+            decision=StagingDecision.STAGE_REJECT,
+            decision_reason=prepared_input.reject_reason or "bridge_rejected",
+            recommendation="retain_reject_trace_only",
+            staged_candidate=None,
+            rejection_trace={
+                "bridge_summary": prepared_input.bridge_summary,
+                "reason": prepared_input.reject_reason or "bridge_rejected",
+            },
+        )
 
     def _record_staged_remote(self, result: "RemoteIntakeResult") -> bool:
         """Record staged remote candidate in validation traces.
@@ -1207,6 +1267,11 @@ class Governor:
                     "decision": result.decision.value,
                     "source_node": result.intake.remote_source_node,
                     "is_downgraded": result.staged_candidate.is_downgraded if result.staged_candidate else False,
+                    "bridge_decision": (
+                        last_trace.remote_execution_bridge_summary.get("bridge_decision")
+                        if getattr(last_trace, "remote_execution_bridge_summary", None)
+                        else None
+                    ),
                 }
             return True
         except Exception:
@@ -2154,7 +2219,10 @@ class Governor:
                     "is_ready": result.is_ready,
                     "final_stage": result.get_final_stage(),
                     "fallback_used": result.fallback_used or result.any_stage_fallback,
+                    "bridge_summary": result.bridge_summary,
                 }
+                if result.bridge_summary:
+                    last_trace.remote_execution_bridge_summary = result.bridge_summary
             return True
         except Exception:
             return False

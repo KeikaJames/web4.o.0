@@ -86,6 +86,7 @@ class CoordinationTrace:
     trace_id: str
     stages: List[StageResult]
     started_at: str
+    bridge_summary: Optional[Dict[str, Any]] = None
     completed_at: Optional[str] = None
     short_circuit_at: Optional[str] = None
     short_circuit_reason: Optional[str] = None
@@ -95,6 +96,7 @@ class CoordinationTrace:
             "trace_id": self.trace_id,
             "stages": [s.to_dict() for s in self.stages],
             "started_at": self.started_at,
+            "bridge_summary": self.bridge_summary,
             "completed_at": self.completed_at,
             "short_circuit_at": self.short_circuit_at,
             "short_circuit_reason": self.short_circuit_reason,
@@ -108,6 +110,7 @@ class CoordinationTrace:
             trace_id=data.get("trace_id", ""),
             stages=stages,
             started_at=data.get("started_at", ""),
+            bridge_summary=data.get("bridge_summary"),
             completed_at=data.get("completed_at"),
             short_circuit_at=data.get("short_circuit_at"),
             short_circuit_reason=data.get("short_circuit_reason"),
@@ -161,6 +164,7 @@ class CoordinationResult:
 
     # Execution trace
     trace: Optional[CoordinationTrace] = None
+    bridge_summary: Optional[Dict[str, Any]] = None
 
     # Fallback tracking
     fallback_used: bool = False
@@ -182,6 +186,7 @@ class CoordinationResult:
                 "decision": self.decision.value,
                 "is_ready": self.is_ready,
             },
+            "bridge_summary": self.bridge_summary,
             "stage_status": {
                 "intake": self.intake_status.value,
                 "triage": self.triage_status.value,
@@ -258,6 +263,7 @@ class CoordinationResult:
             reason=reasoning.get("reason", ""),
             recommendation=reasoning.get("recommendation", ""),
             trace=trace,
+            bridge_summary=data.get("bridge_summary"),
             fallback_used=fallback.get("coordination_fallback_used", False),
             any_stage_fallback=fallback.get("any_stage_fallback", False),
             version=meta.get("version", "1.0"),
@@ -359,20 +365,31 @@ class FederationCoordinator:
         existing_candidates: List[Dict[str, Any]],
     ) -> CoordinationResult:
         """Internal coordination logic."""
+        from .remote_execution_bridge import prepare_remote_execution_input
+
+        if not isinstance(remote_summary_dict, dict) or local_summary is None:
+            raise ValueError("invalid_coordination_input")
+
         now = utc_now()
         coordination_id = f"coord-{str(uuid.uuid4())[:8]}"
         trace_id = str(uuid.uuid4())[:8]
+        prepared = prepare_remote_execution_input(
+            remote_payload=remote_summary_dict,
+            local_summary=local_summary,
+            source_node=source_node,
+        )
 
         # Extract identity
-        identity = remote_summary_dict.get("identity", {})
-        adapter_id = identity.get("adapter_id", "unknown")
-        generation = identity.get("generation", 0)
+        adapter_id = prepared.adapter_id
+        generation = prepared.generation
+        effective_source_node = prepared.source_node
 
         # Initialize trace
         trace = CoordinationTrace(
             trace_id=trace_id,
             stages=[],
             started_at=now,
+            bridge_summary=prepared.bridge_summary,
         )
 
         # Initialize result with defaults
@@ -380,7 +397,7 @@ class FederationCoordinator:
             coordination_id=coordination_id,
             adapter_id=adapter_id,
             generation=generation,
-            source_node=source_node,
+            source_node=effective_source_node,
             decision=CoordinationDecision.COORDINATED_REJECT,
             is_ready=False,
             intake_status=StageStatus.PENDING,
@@ -391,6 +408,7 @@ class FederationCoordinator:
             event_status=StageStatus.PENDING,
             exchange_status=StageStatus.PENDING,
             trace=trace,
+            bridge_summary=prepared.bridge_summary,
             version=self.VERSION,
             coordinated_at=now,
         )
@@ -399,7 +417,7 @@ class FederationCoordinator:
 
         # Stage 1: Intake
         intake_result = self._run_intake(
-            remote_summary_dict, local_summary, source_node, trace
+            prepared, local_summary, trace
         )
         any_fallback = any_fallback or intake_result.fallback_used
         result.intake_status = intake_result.status
@@ -599,32 +617,36 @@ class FederationCoordinator:
 
     def _run_intake(
         self,
-        remote_summary_dict: Dict[str, Any],
+        prepared_input,
         local_summary: Any,
-        source_node: Optional[str],
         trace: CoordinationTrace,
     ) -> StageResult:
         """Run intake stage."""
         now = utc_now()
 
-        if self.intake_processor is None:
-            # No processor available - skip with warning
-            result = StageResult(
-                stage_name="intake",
-                status=StageStatus.SKIPPED,
-                success=True,
-                output={"skipped": True, "reason": "no_processor"},
-                timestamp=now,
-            )
-            trace.stages.append(result)
-            return result
-
         try:
+            from .remote_execution_bridge import BridgeDecision
             from .intake_processor import RemoteIntakeProcessor
+            if prepared_input.bridge_decision == BridgeDecision.BRIDGE_REJECT:
+                result = StageResult(
+                    stage_name="intake",
+                    status=StageStatus.REJECTED,
+                    success=False,
+                    output={
+                        "decision": "bridge_reject",
+                        "recommendation": "retain_trace_only",
+                        "bridge_summary": prepared_input.bridge_summary,
+                    },
+                    error=prepared_input.reject_reason or "bridge_rejected",
+                    timestamp=now,
+                )
+                trace.stages.append(result)
+                return result
+
             intake_result = RemoteIntakeProcessor.process_intake(
-                remote_summary_dict=remote_summary_dict,
+                remote_summary_dict=prepared_input.normalized_summary_dict,
                 local_summary=local_summary,
-                source_node=source_node,
+                source_node=prepared_input.source_node,
             )
 
             # Determine status based on decision
@@ -642,6 +664,7 @@ class FederationCoordinator:
                 "decision": decision,
                 "staged_candidate": intake_result.staged_candidate.to_dict() if intake_result.staged_candidate else None,
                 "recommendation": intake_result.recommendation,
+                "bridge_summary": prepared_input.bridge_summary,
             }
 
             result = StageResult(
@@ -686,30 +709,7 @@ class FederationCoordinator:
             from .types import StagedRemoteCandidate
             # Parse staged candidate
             if isinstance(staged_candidate, dict):
-                # Convert dict to StagedRemoteCandidate
-                from .types import FederationSummary, FederationExchangeGate, StagingDecision
-                summary_dict = staged_candidate.get("summary", {})
-                summary = FederationSummary.from_dict(summary_dict) if summary_dict else None
-
-                gate_dict = staged_candidate.get("gate_result", {})
-                gate = FederationExchangeGate.from_dict(gate_dict) if gate_dict else None
-
-                decision_str = staged_candidate.get("staging_decision", "stage_reject")
-                decision = StagingDecision(decision_str) if decision_str in [d.value for d in StagingDecision] else StagingDecision.STAGE_REJECT
-
-                candidate = StagedRemoteCandidate(
-                    adapter_id=staged_candidate.get("adapter_id", ""),
-                    generation=staged_candidate.get("generation", 0),
-                    source_node=staged_candidate.get("source_node"),
-                    staged_at=staged_candidate.get("staged_at", now),
-                    staging_decision=decision,
-                    staging_version=staged_candidate.get("staging_version", "1.0"),
-                    summary=summary,
-                    gate_result=gate,
-                    is_active=staged_candidate.get("is_active", False),
-                    is_downgraded=staged_candidate.get("is_downgraded", False),
-                    intake_record_ref=staged_candidate.get("intake_record_ref", ""),
-                )
+                candidate = StagedRemoteCandidate.from_dict(staged_candidate)
             else:
                 candidate = staged_candidate
 
@@ -1289,6 +1289,15 @@ class FederationCoordinator:
         Phase 20: Fast path for simple coordination decisions.
         """
         try:
+            from .remote_execution_bridge import BridgeDecision, RemoteExecutionAdmissionBridge, is_remote_execution_bridge_payload
+            if is_remote_execution_bridge_payload(remote_summary_dict):
+                bridge = RemoteExecutionAdmissionBridge.from_dict(remote_summary_dict)
+                return (
+                    bridge.bridge_decision != BridgeDecision.BRIDGE_REJECT
+                    and bool(bridge.adapter_lineage.adapter_id)
+                    and isinstance(bridge.adapter_lineage.adapter_generation, int)
+                )
+
             # Check structure
             identity = remote_summary_dict.get("identity", {})
             if not identity.get("adapter_id"):
