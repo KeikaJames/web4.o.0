@@ -99,7 +99,7 @@ def _safe_write(target_path, content_bytes: bytes) -> None:
             except OSError as exc:
                 # ELOOP (too many levels of symbolic links) or similar — symlink planted
                 import errno as _errno
-                if exc.errno in (_errno.ELOOP, _errno.EEXIST):
+                if exc.errno in (_errno.ELOOP,):
                     raise PermissionError(
                         f"Symlink detected at target path, write refused: {target_path}"
                     ) from exc

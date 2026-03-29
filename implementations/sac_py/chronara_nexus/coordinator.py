@@ -12,9 +12,9 @@ Safe to call during serve path - never blocks or raises.
 
 import uuid
 from typing import Optional, Dict, Any, List
-from datetime import datetime, timezone
 from enum import Enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from .common import utc_now
 
 
 class CoordinationDecision(Enum):
@@ -359,7 +359,7 @@ class FederationCoordinator:
         existing_candidates: List[Dict[str, Any]],
     ) -> CoordinationResult:
         """Internal coordination logic."""
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        now = utc_now()
         coordination_id = f"coord-{str(uuid.uuid4())[:8]}"
         trace_id = str(uuid.uuid4())[:8]
 
@@ -410,7 +410,7 @@ class FederationCoordinator:
             result.reason = f"Intake rejected: {intake_result.error}"
             result.recommendation = "reject_at_intake"
             result.any_stage_fallback = any_fallback
-            trace.completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            trace.completed_at = utc_now()
             trace.short_circuit_at = "intake"
             trace.short_circuit_reason = result.reason
             return result
@@ -420,7 +420,18 @@ class FederationCoordinator:
             result.reason = f"Intake held: {intake_result.error}"
             result.recommendation = "hold_at_intake"
             result.any_stage_fallback = any_fallback
-            trace.completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            trace.completed_at = utc_now()
+            trace.short_circuit_at = "intake"
+            trace.short_circuit_reason = result.reason
+            return result
+
+        if intake_result.status == StageStatus.SKIPPED:
+            result.decision = CoordinationDecision.COORDINATED_REJECT
+            result.reason = "Intake skipped: no processor available"
+            result.recommendation = "reject_no_intake_processor"
+            result.any_stage_fallback = any_fallback
+            result.intake_status = StageStatus.SKIPPED
+            trace.completed_at = utc_now()
             trace.short_circuit_at = "intake"
             trace.short_circuit_reason = result.reason
             return result
@@ -438,7 +449,7 @@ class FederationCoordinator:
                 result.reason = f"Triage rejected: {triage_result.error}"
                 result.recommendation = "reject_at_triage"
                 result.any_stage_fallback = any_fallback
-                trace.completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                trace.completed_at = utc_now()
                 trace.short_circuit_at = "triage"
                 trace.short_circuit_reason = result.reason
                 return result
@@ -448,13 +459,16 @@ class FederationCoordinator:
                 result.reason = f"Triage held: {triage_result.error}"
                 result.recommendation = "hold_at_triage"
                 result.any_stage_fallback = any_fallback
-                trace.completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                trace.completed_at = utc_now()
                 trace.short_circuit_at = "triage"
                 trace.short_circuit_reason = result.reason
                 return result
 
             # Stage 3: Lifecycle
-            lifecycle_result = self._run_lifecycle(triage_result.output, trace)
+            lifecycle_result = self._run_lifecycle(
+                triage_result.output, trace,
+                adapter_id=adapter_id, generation=generation, source_node=source_node,
+            )
             any_fallback = any_fallback or lifecycle_result.fallback_used
             result.lifecycle_status = lifecycle_result.status
             result.lifecycle_summary = lifecycle_result.output
@@ -464,7 +478,7 @@ class FederationCoordinator:
                 result.reason = f"Lifecycle rejected: {lifecycle_result.error}"
                 result.recommendation = "reject_at_lifecycle"
                 result.any_stage_fallback = any_fallback
-                trace.completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                trace.completed_at = utc_now()
                 trace.short_circuit_at = "lifecycle"
                 trace.short_circuit_reason = result.reason
                 return result
@@ -483,7 +497,7 @@ class FederationCoordinator:
                 result.reason = f"Conflict resolution rejected: {conflict_result.error}"
                 result.recommendation = "reject_at_conflict"
                 result.any_stage_fallback = any_fallback
-                trace.completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                trace.completed_at = utc_now()
                 trace.short_circuit_at = "conflict"
                 trace.short_circuit_reason = result.reason
                 return result
@@ -506,17 +520,18 @@ class FederationCoordinator:
                 result.reason = f"Execution rejected: {execution_result.error}"
                 result.recommendation = "reject_at_execution"
                 result.any_stage_fallback = any_fallback
-                trace.completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                trace.completed_at = utc_now()
                 trace.short_circuit_at = "execution"
                 trace.short_circuit_reason = result.reason
                 return result
 
             if execution_result.status == StageStatus.HELD:
+                hold_reason = (execution_result.output or {}).get("reason", execution_result.error or "deferred")
                 result.decision = CoordinationDecision.COORDINATED_HOLD
-                result.reason = f"Execution deferred: {execution_result.error}"
+                result.reason = f"Execution deferred: {hold_reason}"
                 result.recommendation = "hold_at_execution"
                 result.any_stage_fallback = any_fallback
-                trace.completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                trace.completed_at = utc_now()
                 trace.short_circuit_at = "execution"
                 trace.short_circuit_reason = result.reason
                 return result
@@ -550,7 +565,7 @@ class FederationCoordinator:
 
         # Final decision based on all stages
         result.any_stage_fallback = any_fallback
-        trace.completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        trace.completed_at = utc_now()
 
         # Determine final decision
         if result.execution_status == StageStatus.COMPLETED:
@@ -590,7 +605,7 @@ class FederationCoordinator:
         trace: CoordinationTrace,
     ) -> StageResult:
         """Run intake stage."""
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        now = utc_now()
 
         if self.intake_processor is None:
             # No processor available - skip with warning
@@ -659,7 +674,7 @@ class FederationCoordinator:
         trace: CoordinationTrace,
     ) -> StageResult:
         """Run triage stage."""
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        now = utc_now()
 
         if self.triage_engine is None:
             from .triage_engine import RemoteTriageEngine
@@ -750,9 +765,12 @@ class FederationCoordinator:
         self,
         triage_output: Optional[Dict[str, Any]],
         trace: CoordinationTrace,
+        adapter_id: str = "unknown",
+        generation: int = 0,
+        source_node: Optional[str] = None,
     ) -> StageResult:
         """Run lifecycle stage."""
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        now = utc_now()
 
         if self.lifecycle_engine is None:
             from .lifecycle_engine import TriagePoolLifecycle
@@ -762,20 +780,18 @@ class FederationCoordinator:
 
         try:
             from .types import TriageResult, TriageAssessment, ReadinessSummary, TriageStatus
-            from .triage_engine import RemoteTriageEngine
 
             # Reconstruct minimal triage result from output
-            # This is a simplified reconstruction for coordination purposes
             status_str = triage_output.get("status", "reject") if triage_output else "reject"
             triage_status = TriageStatus(status_str) if status_str in [s.value for s in TriageStatus] else TriageStatus.REJECT
 
             readiness_score = triage_output.get("readiness_score", 0.0) if triage_output else 0.0
 
-            # Create minimal assessment
+            # Create assessment with real identity from coordinator context
             assessment = TriageAssessment(
-                adapter_id="unknown",
-                generation=0,
-                source_node=None,
+                adapter_id=adapter_id,
+                generation=generation,
+                source_node=source_node,
                 triage_status=triage_status,
                 triage_version="1.0",
                 triaged_at=now,
@@ -876,33 +892,32 @@ class FederationCoordinator:
         trace: CoordinationTrace,
     ) -> StageResult:
         """Run conflict resolution stage."""
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        now = utc_now()
 
         if self.conflict_resolver is None:
-            from .conflict_resolution import RemoteConflictResolver
-            conflict_resolver = RemoteConflictResolver
+            from .conflict_resolution import RemoteCandidateConflictResolver
+            conflict_resolver = RemoteCandidateConflictResolver
         else:
             conflict_resolver = self.conflict_resolver
 
         try:
-            # Build candidate list including current
-            from .conflict_resolution import CandidateIdentity
+            # Build candidate list as dicts (resolve() expects List[Dict[str, Any]])
             candidates = [
-                CandidateIdentity(
-                    adapter_id=adapter_id,
-                    generation=generation,
-                    source_node=source_node,
-                )
+                {
+                    "adapter_id": adapter_id,
+                    "generation": generation,
+                    "source_node": source_node,
+                }
             ]
 
             for cand in existing_candidates:
-                candidates.append(CandidateIdentity(
-                    adapter_id=cand.get("adapter_id", ""),
-                    generation=cand.get("generation", 0),
-                    source_node=cand.get("source_node"),
-                ))
+                candidates.append({
+                    "adapter_id": cand.get("adapter_id", ""),
+                    "generation": cand.get("generation", 0),
+                    "source_node": cand.get("source_node"),
+                })
 
-            conflict_result = conflict_resolver.resolve_conflicts(
+            conflict_result = conflict_resolver.resolve(
                 candidates=candidates,
                 fallback_on_error=True,
             )
@@ -921,8 +936,8 @@ class FederationCoordinator:
             output = {
                 "has_conflicts": has_conflicts,
                 "can_proceed": can_proceed,
-                "resolution_decision": conflict_result.conflict_set.resolution.decision.value if conflict_result.conflict_set and conflict_result.conflict_set.resolution else "reject_all",
-                "selected_candidate": conflict_result.conflict_set.resolution.selected_candidate if conflict_result.conflict_set and conflict_result.conflict_set.resolution else None,
+                "resolution_decision": conflict_result.conflict_set.resolution_decision.value if conflict_result.conflict_set else "reject_all",
+                "selected_candidate": conflict_result.conflict_set.selected_candidate.to_dict() if conflict_result.conflict_set and conflict_result.conflict_set.selected_candidate else None,
             }
 
             result = StageResult(
@@ -957,7 +972,7 @@ class FederationCoordinator:
         trace: CoordinationTrace,
     ) -> StageResult:
         """Run promotion execution stage."""
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        now = utc_now()
 
         if self.promotion_executor is None:
             from .promotion_execution import FederationPromotionExecutor
@@ -1048,7 +1063,7 @@ class FederationCoordinator:
         trace: CoordinationTrace,
     ) -> StageResult:
         """Run event emission stage."""
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        now = utc_now()
 
         if self.event_emitter is None:
             # No emitter - skip
@@ -1128,7 +1143,7 @@ class FederationCoordinator:
         trace: CoordinationTrace,
     ) -> StageResult:
         """Run exchange skeleton stage."""
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        now = utc_now()
 
         if self.exchange_skeleton is None:
             from .exchange_skeleton import ParameterMemoryExchangeSkeleton
@@ -1219,7 +1234,7 @@ class FederationCoordinator:
         error_message: str,
     ) -> CoordinationResult:
         """Create fallback coordination result on error."""
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        now = utc_now()
         coordination_id = f"coord-fallback-{str(uuid.uuid4())[:8]}"
         trace_id = str(uuid.uuid4())[:8]
 

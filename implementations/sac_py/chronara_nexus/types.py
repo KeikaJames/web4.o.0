@@ -912,6 +912,29 @@ class RemoteSummaryIntake:
             "exchange_gate": self.exchange_gate.to_dict() if self.exchange_gate else None,
         }
 
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "RemoteSummaryIntake":
+        """Create from dictionary, handling serialization key mappings."""
+        remote = data.get("remote", {})
+        intake = data.get("intake", {})
+        validation = data.get("validation", {})
+
+        gate_data = data.get("exchange_gate")
+        exchange_gate = FederationExchangeGate.from_dict(gate_data) if gate_data else None
+
+        return cls(
+            remote_adapter_id=remote.get("adapter_id", data.get("remote_adapter_id", "unknown")),
+            remote_generation=remote.get("generation", data.get("remote_generation", 0)),
+            remote_source_node=remote.get("source_node", data.get("remote_source_node")),
+            intake_timestamp=intake.get("timestamp", data.get("intake_timestamp", "")),
+            intake_version=intake.get("version", data.get("intake_version", "1.0")),
+            raw_summary_hash=data.get("raw_summary_hash", ""),
+            structure_valid=validation.get("structure_valid", data.get("structure_valid", False)),
+            required_fields_present=validation.get("required_fields_present", data.get("required_fields_present", False)),
+            validation_errors=validation.get("errors", data.get("validation_errors", [])),
+            exchange_gate=exchange_gate,
+        )
+
 
 @dataclass
 class StagedRemoteCandidate:

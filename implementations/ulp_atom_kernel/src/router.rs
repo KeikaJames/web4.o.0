@@ -130,7 +130,7 @@ fn score_node(
 
     let latency_score = 1.0 / (1.0 + node.latency_ms / 100.0);
     let hotness_score = node.hotness;
-    let engine_score = 1.0;
+    let engine_score = 1.0; // TODO: derive from NodeProfile engine capabilities
 
     let specialization_score = match atom.kind {
         AtomKind::Prefill => node.prefill_affinity,
@@ -149,7 +149,7 @@ fn score_node(
 
     // Load penalty
     let load_penalty = if node.capacity.current_load > 0.0 {
-        node.capacity.current_load / 100.0
+        node.capacity.current_load.clamp(0.0, 100.0) / 100.0
     } else {
         0.0
     };

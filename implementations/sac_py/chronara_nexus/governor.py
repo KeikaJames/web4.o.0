@@ -1,10 +1,10 @@
 """Governor: Validation, promotion, and rollback protocol."""
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional, Dict, Any, List
 from .types import AdapterRef, ValidationReport, AdapterMode, AdapterSpecialization, AdapterSelection
 from .deliberation import DeliberationOutcome
-from .common import utc_now, CommonMetadata, DecisionThresholds
+from .common import utc_now
 
 
 # Backwards compatibility: _utc_now is now utc_now from common module
@@ -701,11 +701,6 @@ class Governor:
         else:
             return "reject"
 
-    def compute_drift_score(self, metric_summary: dict) -> float:
-        """Compute drift score for future gamma adjustment."""
-        # Placeholder for future dynamic learning rate scheduling
-        return 0.0
-
     def get_validation_traces(self) -> List[ValidationTrace]:
         """Get all validation traces recorded."""
         return self._validation_traces.copy()
@@ -769,6 +764,8 @@ class Governor:
                 # Other statuses (consensus_strategy_only, consensus_reject) block promotion
                 if consensus_status in ("consensus_strategy_only", "consensus_reject"):
                     return False
+                # Unknown consensus status - default deny
+                return False
 
         return True
 
@@ -2067,7 +2064,6 @@ class Governor:
                     adapter_id, generation, source_node, result_data
                 )
 
-            return None
         except Exception:
             return None
 

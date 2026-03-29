@@ -10,7 +10,7 @@ import uuid
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 from enum import Enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 class ExchangeDecision(Enum):
@@ -318,7 +318,7 @@ class ParameterMemoryExchangeSkeleton:
 
     # Thresholds
     MIN_READINESS_SCORE = 0.7
-    MIN_ELIGIBLE_GATES = 6  # All 7 gates must pass
+    MIN_ELIGIBLE_GATES = 6  # At least 6 of 7 gates must pass
 
     @classmethod
     def create_proposal(
@@ -495,8 +495,10 @@ class ParameterMemoryExchangeSkeleton:
             reason = "Insufficient gates passed - reject exchange"
             recommendation = "reject_exchange"
 
-        # Update proposal eligibility
-        proposal.eligibility = ExchangeEligibility(
+        # Create updated eligibility without mutating the original proposal
+        import copy
+        updated_proposal = copy.copy(proposal)
+        updated_proposal.eligibility = ExchangeEligibility(
             lineage_compatible=gates.get("lineage", 0) >= 0.7,
             specialization_compatible=gates.get("specialization", 0) >= 0.7,
             validation_passed=gates.get("validation", 0) >= 0.7,
@@ -505,15 +507,15 @@ class ParameterMemoryExchangeSkeleton:
             conflict_resolved=gates.get("conflict", 0) >= 0.7,
             execution_ready=gates.get("execution", 0) >= 0.7,
             is_eligible=is_ready,
-            blocking_factors=[k for k, v in gates.items() if v < 0.7],
+            blocking_factors=[key for key, v in gates.items() if v < 0.7],
         )
 
         return ExchangeReadiness(
             readiness_id=readiness_id,
-            candidate=proposal.candidate,
+            candidate=updated_proposal.candidate,
             decision=decision,
             is_ready=is_ready,
-            proposal=proposal,
+            proposal=updated_proposal,
             readiness_score=readiness_score,
             readiness_factors=gates,
             reason=reason,
@@ -586,50 +588,3 @@ class ParameterMemoryExchangeSkeleton:
             fallback_used=True,
         )
 
-    @classmethod
-    def quick_exchange_check(
-        cls,
-        proposal_dict: Dict[str, Any],
-    ) -> bool:
-        """Quick check if exchange is possible.
-
-        Phase 18: Fast path for exchange eligibility.
-        """
-        try:
-            proposal = ExchangeProposal.from_dict(proposal_dict)
-            return proposal.eligibility.is_eligible
-        except Exception:
-            return False
-
-    @classmethod
-    def batch_assess_readiness(
-        cls,
-        proposals: List[ExchangeProposal],
-        triage_summaries: Optional[Dict[str, Dict[str, Any]]] = None,
-        lifecycle_summaries: Optional[Dict[str, Dict[str, Any]]] = None,
-        conflict_summaries: Optional[Dict[str, Dict[str, Any]]] = None,
-        execution_summaries: Optional[Dict[str, Dict[str, Any]]] = None,
-    ) -> List[ExchangeReadiness]:
-        """Assess readiness for multiple proposals.
-
-        Phase 18: Batch processing for efficiency.
-        """
-        triage_summaries = triage_summaries or {}
-        lifecycle_summaries = lifecycle_summaries or {}
-        conflict_summaries = conflict_summaries or {}
-        execution_summaries = execution_summaries or {}
-
-        results = []
-        for proposal in proposals:
-            key = proposal.candidate.to_key()
-            readiness = cls.assess_readiness(
-                proposal,
-                triage_summary=triage_summaries.get(key),
-                lifecycle_summary=lifecycle_summaries.get(key),
-                conflict_summary=conflict_summaries.get(key),
-                execution_summary=execution_summaries.get(key),
-                fallback_on_error=True,
-            )
-            results.append(readiness)
-
-        return results

@@ -271,11 +271,11 @@ class Consolidator:
                 }
 
             # Get top-k important keys per specialization
-            def get_top_keys(params: dict, k: int = 5) -> list:
+            def get_top_keys(params: dict, top_n: int = 5) -> list:
                 if not params:
                     return []
                 sorted_items = sorted(params.items(), key=lambda x: abs(x[1]), reverse=True)
-                return [k for k, v in sorted_items[:k]]
+                return [key for key, v in sorted_items[:top_n]]
 
             return {
                 "specializations": {

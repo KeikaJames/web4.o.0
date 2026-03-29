@@ -11,7 +11,7 @@ import uuid
 from typing import Optional, Dict, Any, List, Set, Tuple
 from datetime import datetime
 from enum import Enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 class ConflictType(Enum):
@@ -366,7 +366,7 @@ class ConflictSet:
 
     def is_resolved(self) -> bool:
         """Check if conflict set has been resolved."""
-        return self.resolution_decision != ResolutionDecision.REJECT_ALL or self.fallback_used
+        return self.resolution_decision != ResolutionDecision.REJECT_ALL
 
     def can_proceed(self) -> bool:
         """Check if resolution allows proceeding with at least one candidate."""
@@ -565,7 +565,8 @@ class RemoteCandidateConflictResolver:
 
         # Check for lineage conflicts
         adapter_ids = set(ci.adapter_id for ci in identities)
-        if len(adapter_ids) > 1:
+        has_adapter_id_conflict = len(adapter_ids) > 1
+        if has_adapter_id_conflict:
             conflicts.append(ConflictDetail(
                 conflict_type=ConflictType.LINEAGE_CONFLICT,
                 involved_candidates=[ci.to_key() for ci in identities],
@@ -574,9 +575,9 @@ class RemoteCandidateConflictResolver:
                 resolution_hint="Reject all or hold for manual review",
             ))
 
-        # Check generation compatibility
+        # Check generation compatibility (only if no adapter ID conflict already detected)
         generations = [ci.generation for ci in identities]
-        if generations:
+        if generations and not has_adapter_id_conflict:
             gen_range = max(generations) - min(generations)
             if gen_range > 2:
                 conflicts.append(ConflictDetail(

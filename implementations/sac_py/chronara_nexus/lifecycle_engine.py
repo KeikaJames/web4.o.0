@@ -11,14 +11,13 @@ Safe to call during serve path - never blocks or raises.
 
 import uuid
 from typing import Optional, List, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .types import (
     TriageResult,
     TriageStatus,
-    StagedRemoteCandidate,
 )
 
 
@@ -308,7 +307,6 @@ class TriagePoolLifecycle:
         current_time: Optional[datetime],
     ) -> LifecycleResult:
         """Internal lifecycle evaluation logic."""
-        from datetime import timezone
         now = current_time or datetime.now(timezone.utc)
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
@@ -536,7 +534,6 @@ class TriagePoolLifecycle:
         error_message: str,
     ) -> LifecycleResult:
         """Create fallback lifecycle result on error."""
-        from datetime import timezone
         processed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         trace_id = str(uuid.uuid4())[:8]
 
@@ -590,7 +587,7 @@ class TriagePoolLifecycle:
                 return True
 
             if lifecycle_meta.expires_at:
-                now = current_time or datetime.utcnow()
+                now = current_time or datetime.now(timezone.utc)
                 expires_dt = datetime.fromisoformat(lifecycle_meta.expires_at.replace("Z", "+00:00"))
                 return now >= expires_dt
 

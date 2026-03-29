@@ -601,11 +601,15 @@ class SACContainer:
             consolidator_params = None
             if hasattr(self, '_chronara_consolidator'):
                 consolidator = self._chronara_consolidator
-                # Use candidate params if available, else stable
-                if consolidator.candidate_adapter:
-                    consolidator_params = consolidator.get_specialization_params(AdapterSpecialization.CANDIDATE)
-                elif consolidator.stable_adapter:
-                    consolidator_params = consolidator.get_specialization_params(AdapterSpecialization.STABLE)
+                try:
+                    from chronara_nexus.types import AdapterSpecialization
+                    # Use candidate params if available, else stable
+                    if consolidator.candidate_adapter:
+                        consolidator_params = consolidator.get_specialization_params(AdapterSpecialization.CANDIDATE)
+                    elif consolidator.stable_adapter:
+                        consolidator_params = consolidator.get_specialization_params(AdapterSpecialization.STABLE)
+                except (ImportError, ModuleNotFoundError):
+                    pass
 
             # Extract from Governor (primary source)
             summary = self._chronara_governor.extract_federation_summary(
@@ -694,10 +698,14 @@ class SACContainer:
             consolidator_params = None
             if hasattr(self, '_chronara_consolidator'):
                 consolidator = self._chronara_consolidator
-                if consolidator.candidate_adapter:
-                    consolidator_params = consolidator.get_specialization_params(AdapterSpecialization.CANDIDATE)
-                elif consolidator.stable_adapter:
-                    consolidator_params = consolidator.get_specialization_params(AdapterSpecialization.STABLE)
+                try:
+                    from chronara_nexus.types import AdapterSpecialization
+                    if consolidator.candidate_adapter:
+                        consolidator_params = consolidator.get_specialization_params(AdapterSpecialization.CANDIDATE)
+                    elif consolidator.stable_adapter:
+                        consolidator_params = consolidator.get_specialization_params(AdapterSpecialization.STABLE)
+                except (ImportError, ModuleNotFoundError):
+                    pass
 
             # Use Governor's exchange compatibility check
             gate = self._chronara_governor.check_exchange_compatibility(
@@ -762,7 +770,7 @@ class SACContainer:
                 reason="Error parsing remote summary",
                 fallback_used=True,
                 version="1.1",
-                timestamp=datetime.utcnow().isoformat() + "Z",
+                timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             )
             return gate.to_dict()
 
@@ -820,7 +828,7 @@ class SACContainer:
                 StagingDecision,
             )
 
-            processed_at = datetime.utcnow().isoformat() + "Z"
+            processed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             remote_identity = remote_summary_dict.get('identity', {}) if isinstance(remote_summary_dict, dict) else {}
 
             intake = RemoteSummaryIntake(
@@ -890,8 +898,6 @@ class SACContainer:
             dict: TriageResult as dictionary
         """
         from chronara_nexus.types import StagedRemoteCandidate, TriageResult, TriageAssessment, TriageStatus, ReadinessSummary
-        from datetime import datetime
-        import uuid
 
         try:
             # Parse staged candidate
@@ -908,7 +914,7 @@ class SACContainer:
 
         except Exception as e:
             # Failure safety: return reject result
-            processed_at = datetime.utcnow().isoformat() + "Z"
+            processed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
             assessment = TriageAssessment(
                 adapter_id=staged_candidate_dict.get('identity', {}).get('adapter_id', 'unknown'),
@@ -1006,8 +1012,6 @@ class SACContainer:
             TriageResult, LifecycleMeta, LifecycleResult,
             LifecycleState, LifecycleDecision
         )
-        from datetime import datetime
-        import uuid
 
         try:
             # Parse triage result
@@ -1032,7 +1036,7 @@ class SACContainer:
 
         except Exception as e:
             # Failure safety: return expire result
-            processed_at = datetime.utcnow().isoformat() + "Z"
+            processed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
             assessment = triage_result_dict.get('assessment', {})
             identity = assessment.get('identity', {})
@@ -1158,8 +1162,6 @@ class SACContainer:
             ValidationComparisonSummary,
             ResolutionDecision,
         )
-        from datetime import datetime
-        import uuid
 
         try:
             # Initialize if needed
@@ -1175,7 +1177,7 @@ class SACContainer:
 
         except Exception as e:
             # Failure safety: return reject_all result
-            processed_at = datetime.utcnow().isoformat() + "Z"
+            processed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             trace_id = str(uuid.uuid4())[:8]
 
             # Build minimal identities
@@ -1336,8 +1338,6 @@ class SACContainer:
             ExecutionDecision,
             ExecutionStatus,
         )
-        from datetime import datetime
-        import uuid
 
         try:
             # Initialize if needed
@@ -1356,7 +1356,7 @@ class SACContainer:
 
         except Exception as e:
             # Failure safety: return reject result
-            processed_at = datetime.utcnow().isoformat() + "Z"
+            processed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             trace_id = str(uuid.uuid4())[:8]
             execution_id = f"exec-sac-fallback-{trace_id}"
 

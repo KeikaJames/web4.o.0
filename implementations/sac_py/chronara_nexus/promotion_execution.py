@@ -11,7 +11,7 @@ import uuid
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 from enum import Enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 class ExecutionDecision(Enum):
@@ -696,8 +696,9 @@ class FederationPromotionExecutor:
         now = datetime.now(timezone.utc)
         processed_at = now.isoformat().replace("+00:00", "Z")
 
-        # Update execution
-        execution = execution_result.execution
+        # Deep copy to avoid mutating the caller's object
+        import copy
+        execution = copy.deepcopy(execution_result.execution)
         execution.decision = ExecutionDecision.ROLLBACK
         execution.status = ExecutionStatus.ROLLED_BACK
         execution.execution_trace.append(ExecutionTrace(

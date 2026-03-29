@@ -83,12 +83,10 @@ pub fn dispatch(
     let placement = router::route_with_kv(&request.atom, &request.candidates, Some(&kv_ctx))
         .ok_or_else(|| "no candidate nodes".to_string())?;
 
-    let target_region = Region(placement.breakdown.node_id.clone());
-    // use the actual region from the winning node
     let target_region = request.candidates.iter()
         .find(|n| n.node_id == placement.breakdown.node_id)
         .map(|n| n.region.clone())
-        .unwrap_or(target_region);
+        .unwrap_or_else(|| Region(placement.breakdown.node_id.clone()));
 
     // 2. migrate KV chunks based on transport decision
     let mut migrations = Vec::new();

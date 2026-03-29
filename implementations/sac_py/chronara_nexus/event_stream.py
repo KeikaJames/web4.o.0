@@ -11,7 +11,7 @@ import uuid
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 from enum import Enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 class EventType(Enum):
@@ -537,7 +537,7 @@ class FederationEventEmitter:
             summary={
                 "execution_id": execution.get("identity", {}).get("execution_id"),
                 "reason": execution.get("reason"),
-                "previous_status": execution_result.get("outcome", {}).get("previous_status"),
+                "previous_status": execution_result.get("outcome", {}).get("details", {}).get("previous_status"),
             },
             intake_ref=None,
             staging_ref=None,
